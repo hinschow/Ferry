@@ -4,7 +4,7 @@
 #
 #  用法：把本文件放到新服务器上，然后
 #        bash bridge-install.sh <你的Windows用户名> [隧道端口，默认2222]
-#    例：bash bridge-install.sh Hins
+#    例：bash bridge-install.sh yourname
 #
 #  安装完会打印一段公钥和 Windows 侧要做的两步操作。
 # ============================================================================
@@ -41,10 +41,10 @@ echo "$CLIENT_NAME" > /root/.winbridge/current
 cat > /root/.winbridge/config <<CFGEOF
 WIN_USER="$WIN_USER"
 WIN_PORT=$WIN_PORT
-WIN_PROJECT=""                 # 默认项目路径，如 D:\\code-test（可留空）
+WIN_PROJECT=""                 # 默认项目路径（可留空）
 MOUNT_POINT=/root/local-project
 STATUS_DIR='/root/local-project/bridge-console'   # 状态文件只写这里，不碰用户项目
-TOOL_DIR_WIN='D:\\code-test\\bridge-console'   # 工具目录的 Windows 侧路径（win-daemon 用），按实际挂载改
+TOOL_DIR_WIN='C:\\bridge-console'   # 客户端工具目录（客户端连上后会自动上报覆盖）
 CFGEOF
 echo "    /root/.winbridge/config"
 
@@ -293,18 +293,19 @@ cat > /usr/local/bin/bridge-daemon <<'TOOL_bridge_daemon_EOF'
 #
 # 在本地机器上启动脱离 SSH 会话的长驻进程。
 #   Windows: 必须用计划任务（OpenSSH 会在会话结束时杀掉整个子进程树）
-#   macOS/Linux: nohup + setsid 即可
+#   macOS: 无 setsid 命令，用子 shell + nohup（Linux 优先 setsid）
 ACT="$1"; DNAME="$2"; shift 2 2>/dev/null
 . /root/.winbridge/lib.sh
 bridge_resolve_client "$@" || exit 1
 [ $BRIDGE_SHIFT -gt 0 ] && shift $BRIDGE_SHIFT
 NAME="$DNAME"          # 客户端档案里的 NAME= 会覆盖它，所以在 source 之后恢复
 
-DAEMON_SRV="/root/mnt/$CLIENT/$(bridge_mount_name "$TOOL_DIR")/daemons"
+# daemon 脚本与日志放进【已挂载的状态目录】，不再为此单独挂载工具目录
+DAEMON_SRV="/root/.winbridge/status/$CLIENT/daemons"
 if [ "$OS" = "windows" ]; then
-  DAEMON_LOCAL="${TOOL_DIR}\\daemons"; SEP='\'
+  DAEMON_LOCAL="${STATUS_LOCAL:-${TOOL_DIR}\\status\\${STATUS_SUB:-$CLIENT}}\\daemons"
 else
-  DAEMON_LOCAL="${TOOL_DIR}/daemons";  SEP='/'
+  DAEMON_LOCAL="${STATUS_LOCAL:-${TOOL_DIR}/status/${STATUS_SUB:-$CLIENT}}/daemons"
 fi
 mkdir -p "$DAEMON_SRV" 2>/dev/null
 
@@ -344,7 +345,9 @@ Write-Output 'started: ${NAME}'"
       rm -f "$DAEMON_SRV/${NAME}.log"
       bridge-run -c "$CLIENT" "mkdir -p '${DAEMON_LOCAL}'; chmod +x '${DAEMON_LOCAL}/${NAME}.sh'; \
 echo \$\$ > '${DAEMON_LOCAL}/${NAME}.pid'; \
-nohup setsid '${DAEMON_LOCAL}/${NAME}.sh' >/dev/null 2>&1 & echo \"started: ${NAME} pid \$!\""
+(setsid '${DAEMON_LOCAL}/${NAME}.sh' >/dev/null 2>&1 </dev/null &) 2>/dev/null \
+  || (nohup '${DAEMON_LOCAL}/${NAME}.sh' >/dev/null 2>&1 </dev/null &); \
+echo 'started: ${NAME}'"
     fi ;;
 
   log)  tail -n "${1:-40}" "$DAEMON_SRV/${NAME}.log" 2>/dev/null || echo "(无日志)" ;;
