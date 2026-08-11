@@ -1,0 +1,54 @@
+#!/bin/bash
+# bridge-statusd start|stop|status [-c 客户端]   不带 -c 则对所有客户端操作
+ACT="$1"; shift
+. /root/.winbridge/lib.sh
+
+one() {
+  local conf="$1" act="$2"
+  ( . "$conf"
+    CLIENT="$NAME"; MNT_ROOT="/root/mnt/$CLIENT"; SDIR="/root/.winbridge/status/$CLIENT"
+    PIDF="/root/.winbridge/statusd-$CLIENT.pid"
+    case "$act" in
+      start)
+        if [ -f "$PIDF" ] && kill -0 "$(cat "$PIDF")" 2>/dev/null; then
+          echo "  $CLIENT: 已在运行 (pid $(cat "$PIDF"))"; return 0; fi
+        loop() {
+          local NAME_F=.bridge-status.json INTERVAL=3
+          while true; do
+            local TS PORT_OK UP MJSON mp src JSON
+            TS=$(date +%s)
+            if ss -tln 2>/dev/null | grep -q ":${PORT} "; then PORT_OK=true; else PORT_OK=false; fi
+            UP=$(uptime -p 2>/dev/null | tr '"' '@')
+            MJSON=""
+            while IFS=$'\t' read -r mp src; do
+              [ -z "$mp" ] && continue
+              MJSON="${MJSON:+$MJSON,}{\"mount\":\"$mp\",\"src\":\"$src\"}"
+            done < <(awk -v p="$MNT_ROOT" -v s="$SDIR" \
+                 '$3=="fuse.sshfs" && (index($2,p)==1 || $2==s){gsub(/\\040/," ",$2); print $2"\t"$1}' /proc/mounts)
+            JSON="{\"ts\":$TS,\"client\":\"$CLIENT\",\"os\":\"$OS\",\"port_ok\":$PORT_OK,\"uptime\":\"$UP\",\"mounts\":[$MJSON]}"
+            if [ -d "$SDIR" ]; then
+              ( printf '%s' "$JSON" > "$SDIR/$NAME_F" ) & local p=$!
+              ( sleep 5; kill $p 2>/dev/null ) & local w=$!
+              wait $p 2>/dev/null; kill $w 2>/dev/null
+            fi
+            sleep $INTERVAL
+          done
+        }
+        setsid bash -c "PORT=$PORT CLIENT=$CLIENT OS=$OS MNT_ROOT=$MNT_ROOT SDIR=$SDIR
+                        $(declare -f loop); loop" >/dev/null 2>&1 < /dev/null &
+        echo $! > "$PIDF"; echo "  $CLIENT: 已启动 (pid $!)" ;;
+      stop)
+        [ -f "$PIDF" ] && kill "$(cat "$PIDF")" 2>/dev/null && rm -f "$PIDF" \
+          && echo "  $CLIENT: 已停止" || echo "  $CLIENT: 未在运行" ;;
+      status)
+        if [ -f "$PIDF" ] && kill -0 "$(cat "$PIDF")" 2>/dev/null; then
+          echo "  $CLIENT: 运行中 (pid $(cat "$PIDF"))"; else echo "  $CLIENT: 未运行"; fi ;;
+    esac )
+}
+
+case "$ACT" in
+  start|stop|status)
+    if [ "$1" = "-c" ]; then one "/root/.winbridge/clients/$2.conf" "$ACT"
+    else for f in /root/.winbridge/clients/*.conf; do one "$f" "$ACT"; done; fi ;;
+  *) echo "用法: bridge-statusd start|stop|status [-c 客户端]"; exit 1 ;;
+esac

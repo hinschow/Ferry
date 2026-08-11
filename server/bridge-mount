@@ -1,0 +1,24 @@
+#!/bin/bash
+# bridge-mount [-c 客户端] <本地路径> [挂载点]
+. /root/.winbridge/lib.sh
+bridge_resolve_client "$@" || exit 1
+[ $BRIDGE_SHIFT -gt 0 ] && shift $BRIDGE_SHIFT
+LPATH="$1"
+[ -z "$LPATH" ] && { echo "ERR|用法: bridge-mount [-c 客户端] <本地路径> [挂载点]"; exit 1; }
+
+SFTP_PATH=$(bridge_sftp_path "$LPATH")
+MP="${2:-$MNT_ROOT/$(bridge_mount_name "$LPATH")}"
+
+mountpoint -q "$MP" && { echo "ALREADY|$MP"; exit 0; }
+mkdir -p "$MP" || { echo "ERR|无法创建挂载点 $MP"; exit 1; }
+
+ERR=$(sshfs -p "$PORT" "$USER@127.0.0.1:$SFTP_PATH" "$MP" \
+  -o IdentityFile=/root/.ssh/id_win,reconnect,ServerAliveInterval=15,ServerAliveCountMax=3 \
+  -o compression=yes,max_conns=4 \
+  -o cache=yes,kernel_cache,cache_timeout=60 \
+  -o attr_timeout=15,entry_timeout=15,negative_timeout=5 \
+  -o uid=0,gid=0,StrictHostKeyChecking=no,UserKnownHostsFile=/dev/null 2>&1)
+
+if mountpoint -q "$MP"; then echo "OK|$MP"; else
+  rmdir "$MP" 2>/dev/null; echo "ERR|${ERR:-挂载失败，检查路径是否存在}"; exit 1
+fi

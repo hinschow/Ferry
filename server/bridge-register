@@ -1,0 +1,65 @@
+#!/bin/bash
+# bridge-register --name <名> --os <windows|macos|linux> --user <用户名>
+#                 [--tool-dir <路径>] [--status-local <路径>] [--label <说明>] [--port <端口>]
+#
+# 由客户端在建立隧道前自动调用：客户端把自己的身份上报，服务器分配端口并建档。
+# 输出形如  PORT=2224  供客户端解析。已存在则返回原端口（幂等）。
+NAME=""; OS=""; USER_=""; TOOL=""; SLOCAL=""; LABEL=""; PORT=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --name) NAME="$2"; shift 2 ;;
+    --os) OS="$2"; shift 2 ;;
+    --user) USER_="$2"; shift 2 ;;
+    --tool-dir) TOOL="$2"; shift 2 ;;
+    --status-local) SLOCAL="$2"; shift 2 ;;
+    --label) LABEL="$2"; shift 2 ;;
+    --port) PORT="$2"; shift 2 ;;
+    *) echo "ERR|未知参数: $1"; exit 1 ;;
+  esac
+done
+[ -z "$NAME" ] || [ -z "$OS" ] || [ -z "$USER_" ] && {
+  echo "ERR|--name --os --user 必填"; exit 1; }
+# 名字消毒，避免路径穿越
+NAME=$(printf '%s' "$NAME" | tr -cd '[:alnum:]._-' | cut -c1-40)
+[ -z "$NAME" ] && { echo "ERR|名字非法"; exit 1; }
+
+CONF="/root/.winbridge/clients/${NAME}.conf"
+mkdir -p /root/.winbridge/clients
+
+if [ -f "$CONF" ] && [ -z "$PORT" ]; then
+  PORT=$(sed -n 's/^PORT=//p' "$CONF" | sed 's/#.*//; s/[[:space:]]//g' | head -1)
+fi
+if [ -z "$PORT" ]; then
+  USED=$(grep -h '^PORT=' /root/.winbridge/clients/*.conf 2>/dev/null \
+         | cut -d= -f2 | sed 's/#.*//; s/[[:space:]]//g' | grep -E '^[0-9]+$')
+  PORT=2222
+  while echo "$USED" | grep -qx "$PORT" || ss -tln 2>/dev/null | grep -q ":$PORT "; do
+    PORT=$((PORT + 1))
+  done
+fi
+
+[ -z "$TOOL" ] && case "$OS" in
+  windows) TOOL='C:\bridge-console' ;;
+  *)       TOOL="/home/$USER_/bridge-console" ;;
+esac
+[ -z "$SLOCAL" ] && case "$OS" in
+  windows) SLOCAL="${TOOL}\\status\\${NAME}" ;;
+  *)       SLOCAL="${TOOL}/status/${NAME}" ;;
+esac
+[ -z "$LABEL" ] && LABEL="$NAME"
+
+cat > "$CONF" <<CFGEOF
+NAME=$NAME
+OS=$OS
+USER=$USER_
+PORT=$PORT
+LABEL='$LABEL'
+TOOL_DIR='$TOOL'
+STATUS_LOCAL='$SLOCAL'
+CFGEOF
+mkdir -p "/root/.winbridge/status/$NAME" "/root/mnt/$NAME"
+[ -f /root/.winbridge/current ] || echo "$NAME" > /root/.winbridge/current
+
+echo "PORT=$PORT"
+echo "NAME=$NAME"
+echo "OK|已登记 $NAME ($OS/$USER_) 端口 $PORT"

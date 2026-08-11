@@ -1,0 +1,10 @@
+#!/bin/bash
+. /root/.winbridge/lib.sh
+bridge_resolve_client "$@" || exit 1
+[ $BRIDGE_SHIFT -gt 0 ] && shift $BRIDGE_SHIFT
+MP="$1"
+[ -z "$MP" ] && { echo "ERR|用法: bridge-umount [-c 客户端] <挂载点>"; exit 1; }
+fusermount3 -u "$MP" 2>/dev/null || fusermount -u "$MP" 2>/dev/null
+mountpoint -q "$MP" && { echo "ERR|卸载失败，可能有进程正在使用"; exit 1; }
+case "$MP" in /root/mnt/*) rmdir "$MP" 2>/dev/null ;; esac
+echo "OK|$MP"

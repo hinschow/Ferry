@@ -1,0 +1,10 @@
+#!/bin/bash
+# bridge-mounts [-c 客户端]   不带 -c 则列出全部
+. /root/.winbridge/lib.sh
+if [ "$1" = "-c" ]; then
+  bridge_resolve_client "$@" || exit 1
+  awk -v p="$MNT_ROOT" -v s="/root/.winbridge/status/$CLIENT" \
+    '$3=="fuse.sshfs" && (index($2,p)==1 || $2==s) {gsub(/\\040/," ",$2); print $2"\t"$1}' /proc/mounts
+else
+  awk '$3=="fuse.sshfs" {gsub(/\\040/," ",$2); print $2"\t"$1}' /proc/mounts
+fi

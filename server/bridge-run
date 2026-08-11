@@ -1,0 +1,25 @@
+#!/bin/bash
+# bridge-run [-c 客户端] [-d 工作目录] "命令"   — 在本地机器上原生执行
+. /root/.winbridge/lib.sh
+bridge_resolve_client "$@" || exit 1
+[ $BRIDGE_SHIFT -gt 0 ] && shift $BRIDGE_SHIFT
+WD=""; if [ "$1" = "-d" ]; then WD="$2"; shift 2; fi
+[ -z "$1" ] && { echo "用法: bridge-run [-c 客户端] [-d 目录] \"命令\""; exit 1; }
+
+SSH_OPTS=(-i /root/.ssh/id_win -p "$PORT"
+  -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
+  -o LogLevel=ERROR -o ConnectTimeout=15
+  -o ControlMaster=auto -o ControlPath="/root/.winbridge/cm-${CLIENT}-%C" -o ControlPersist=60m)
+
+if [ "$OS" = "windows" ]; then
+  PS=$(printf '$ProgressPreference="SilentlyContinue"; [Console]::OutputEncoding=[Text.Encoding]::UTF8; %s%s' \
+        "$( [ -n "$WD" ] && printf 'Set-Location "%s"; ' "$WD" )" "$*")
+  ENC=$(printf '%s' "$PS" | iconv -f UTF-8 -t UTF-16LE | base64 -w0)
+  exec ssh "${SSH_OPTS[@]}" "$USER@127.0.0.1" \
+      "powershell -NoLogo -NonInteractive -EncodedCommand $ENC" \
+      2> >(grep -v -e '^#< CLIXML' -e '^<Objs ' >&2)
+else
+  # macOS / Linux：直接 bash，无需编码转换
+  CMD="$( [ -n "$WD" ] && printf 'cd %q && ' "$WD" )$*"
+  exec ssh "${SSH_OPTS[@]}" "$USER@127.0.0.1" "bash -lc $(printf '%q' "$CMD")"
+fi

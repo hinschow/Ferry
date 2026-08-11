@@ -1,0 +1,66 @@
+#!/bin/bash
+# bridge-add-client <名字> <windows|macos|linux> <该机器上的用户名> [端口]
+# 不给端口则自动挑一个没被占用的
+NAME="$1"; OS="$2"; USER="$3"; PORT="$4"
+[ -z "$NAME" ] || [ -z "$OS" ] || [ -z "$USER" ] && {
+  echo "用法: bridge-add-client <名字> <windows|macos|linux> <用户名> [端口]"; exit 1; }
+CONF="/root/.winbridge/clients/${NAME}.conf"
+[ -f "$CONF" ] && { echo "ERR|客户端 $NAME 已存在: $CONF"; exit 1; }
+
+if [ -z "$PORT" ]; then
+  # 逐行剥注释与空白（不能用 tr -d '[:space:]'，那会把换行也删掉，端口会粘连）
+  USED=$(grep -h '^PORT=' /root/.winbridge/clients/*.conf 2>/dev/null \
+         | cut -d= -f2 | sed 's/#.*//; s/[[:space:]]//g' | grep -E '^[0-9]+$')
+  PORT=2222
+  while echo "$USED" | grep -qx "$PORT" || ss -tln 2>/dev/null | grep -q ":$PORT "; do
+    PORT=$((PORT + 1))
+  done
+fi
+
+case "$OS" in
+  windows) TOOL='D:\bridge-console'; SLOCAL="D:\\bridge-console\\status\\${NAME}" ;;
+  *)       TOOL="/Users/$USER/bridge-console"; SLOCAL="/Users/$USER/bridge-console/status/${NAME}" ;;
+esac
+
+cat > "$CONF" <<CFGEOF
+NAME=$NAME
+OS=$OS
+USER=$USER
+PORT=$PORT
+LABEL='$NAME'
+TOOL_DIR='$TOOL'
+STATUS_LOCAL='$SLOCAL'
+CFGEOF
+mkdir -p "/root/.winbridge/status/$NAME" "/root/mnt/$NAME"
+
+PUB=$(cat /root/.ssh/id_win.pub 2>/dev/null)
+SRV=$(curl -s -m 5 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
+cat <<TIPEOF
+
+✅ 已创建客户端档案: $CONF
+   名字=$NAME  系统=$OS  用户=$USER  隧道端口=$PORT（自动避开已用端口）
+
+在【那台 $OS 机器】上执行：
+TIPEOF
+if [ "$OS" = "windows" ]; then
+cat <<TIPEOF
+  1) 复制 bridge-console 目录过去（含 bridge_gui.py / setup-windows.ps1）
+  2) 管理员 PowerShell:
+     powershell -ExecutionPolicy Bypass -File setup-windows.ps1 \\
+       -PubKey "$PUB" \\
+       -ServerHost $SRV -Alias $NAME -Port $PORT -LoopbackOnly -AutoStart
+  3) 双击 桌面客户端.bat → 「添加服务器…」→ SSH 别名填 $NAME
+TIPEOF
+else
+cat <<TIPEOF
+  1) 复制 bridge-console 目录过去（含 bridge_gui.py / setup-mac.sh）
+  2) 终端:
+     bash setup-mac.sh --pubkey "$PUB" \\
+       --host $SRV --alias $NAME --port $PORT --autostart
+  3) python3 bridge_gui.py → 「添加服务器…」→ SSH 别名填 $NAME
+TIPEOF
+fi
+cat <<TIPEOF
+
+回到服务器验证：  bridge-check -c $NAME
+TIPEOF

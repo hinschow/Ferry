@@ -1,0 +1,17 @@
+# 本机专属，绝不入库
+bridge-config.json
+client-*.conf
+
+# 运行时产物
+status/
+daemons/
+*.log
+.bridge-status.json
+
+# Python
+__pycache__/
+*.py[cod]
+
+# 系统
+.DS_Store
+Thumbs.db

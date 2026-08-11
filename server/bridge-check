@@ -1,0 +1,24 @@
+#!/bin/bash
+# bridge-check [-c 客户端]   不带 -c 则检查全部
+. /root/.winbridge/lib.sh
+check_one() {
+  local conf="$1"; ( . "$conf"
+    CLIENT="$NAME"; MNT_ROOT="/root/mnt/$CLIENT"; STATUS_DIR="/root/.winbridge/status/$CLIENT"
+    printf '\n══ %s (%s / %s) ══\n' "$CLIENT" "$OS" "$LABEL"
+    if ss -tln 2>/dev/null | grep -q ":$PORT "; then echo "  隧道端口 $PORT   ✅ 已监听"
+    else echo "  隧道端口 $PORT   ❌ 未监听 —— 该机器未建立隧道"; return 1; fi
+    local probe
+    if [ "$OS" = "windows" ]; then probe='Write-Output OK'; else probe='echo OK'; fi
+    if bridge-run -c "$CLIENT" "$probe" 2>/dev/null | grep -q OK; then echo "  免密登录     ✅ 成功"
+    else echo "  免密登录     ❌ 失败"; return 1; fi
+    local n; n=$(bridge-mounts -c "$CLIENT" | wc -l)
+    echo "  挂载数量     $n"
+    local f="$STATUS_DIR/.bridge-status.json"
+    if [ -f "$f" ]; then
+      local ts; ts=$(grep -o '"ts":[0-9]*' "$f" 2>/dev/null | cut -d: -f2)
+      [ -n "$ts" ] && echo "  状态管道     ✅ $(( $(date +%s) - ts ))秒前" || echo "  状态管道     ⚠️ 文件异常"
+    else echo "  状态管道     ⚠️ 未挂载（客户端会回退 SSH 探测）"; fi
+  )
+}
+if [ "$1" = "-c" ]; then check_one "/root/.winbridge/clients/$2.conf"
+else for f in /root/.winbridge/clients/*.conf; do check_one "$f"; done; fi

@@ -1,0 +1,3 @@
+#!/bin/bash
+rm -f /root/.winbridge/cm-* 2>/dev/null
+echo "已清理 SSH 复用连接"

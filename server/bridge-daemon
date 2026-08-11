@@ -1,0 +1,82 @@
+#!/bin/bash
+# bridge-daemon start <名字> [-c 客户端] [-d 工作目录] '<命令>'
+# bridge-daemon log <名字> [-c 客户端] [行数] | stop <名字> [-c 客户端] | list [-c 客户端]
+#
+# 在本地机器上启动脱离 SSH 会话的长驻进程。
+#   Windows: 必须用计划任务（OpenSSH 会在会话结束时杀掉整个子进程树）
+#   macOS: 无 setsid 命令，用子 shell + nohup（Linux 优先 setsid）
+ACT="$1"; DNAME="$2"; shift 2 2>/dev/null
+. /root/.winbridge/lib.sh
+bridge_resolve_client "$@" || exit 1
+[ $BRIDGE_SHIFT -gt 0 ] && shift $BRIDGE_SHIFT
+NAME="$DNAME"          # 客户端档案里的 NAME= 会覆盖它，所以在 source 之后恢复
+
+# daemon 脚本与日志放进【已挂载的状态目录】，不再为此单独挂载工具目录
+DAEMON_SRV="/root/.winbridge/status/$CLIENT/daemons"
+if [ "$OS" = "windows" ]; then
+  DAEMON_LOCAL="${STATUS_LOCAL:-${TOOL_DIR}\\status\\${STATUS_SUB:-$CLIENT}}\\daemons"
+else
+  DAEMON_LOCAL="${STATUS_LOCAL:-${TOOL_DIR}/status/${STATUS_SUB:-$CLIENT}}/daemons"
+fi
+mkdir -p "$DAEMON_SRV" 2>/dev/null
+
+case "$ACT" in
+  start)
+    WD=""; if [ "$1" = "-d" ]; then WD="$2"; shift 2; fi
+    CMD="$*"
+    { [ -z "$NAME" ] || [ -z "$CMD" ]; } && { echo "用法: bridge-daemon start <名字> [-c 客户端] [-d 目录] '<命令>'"; exit 1; }
+
+    if [ "$OS" = "windows" ]; then
+      {
+        echo "\$ErrorActionPreference = 'Continue'"
+        echo "\$OutputEncoding = [Text.UTF8Encoding]::new(\$false)"
+        echo "[Console]::OutputEncoding = [Text.UTF8Encoding]::new(\$false)"
+        echo "chcp 65001 > \$null"
+        echo "\$log = '${DAEMON_LOCAL}\\${NAME}.log'"
+        [ -n "$WD" ] && echo "Set-Location '$WD'"
+        echo "Add-Content \$log -Encoding UTF8 (\"=== started \" + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + \" ===\")"
+        echo "& {"; echo "$CMD"; echo "} *>&1 | ForEach-Object { Add-Content \$log (\"\$_\") -Encoding UTF8 }"
+        echo "Add-Content \$log -Encoding UTF8 (\"=== exited \" + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + \" ===\")"
+      } > "$DAEMON_SRV/${NAME}.ps1"
+      rm -f "$DAEMON_SRV/${NAME}.log"
+      bridge-run -c "$CLIENT" "schtasks /delete /tn 'bridge_${CLIENT}_${NAME}' /f 2>&1 | Out-Null
+schtasks /create /tn 'bridge_${CLIENT}_${NAME}' /tr 'powershell -NoLogo -WindowStyle Hidden -ExecutionPolicy Bypass -File \"${DAEMON_LOCAL}\\${NAME}.ps1\"' /sc once /st 00:00 /f 2>&1 | Out-Null
+schtasks /run /tn 'bridge_${CLIENT}_${NAME}' 2>&1 | Out-Null
+Write-Output 'started: ${NAME}'"
+    else
+      {
+        echo "#!/bin/bash"
+        echo "log='${DAEMON_LOCAL}/${NAME}.log'"
+        [ -n "$WD" ] && echo "cd $(printf '%q' "$WD") || exit 1"
+        echo 'echo "=== started $(date "+%Y-%m-%d %H:%M:%S") ===" >> "$log"'
+        echo "{"; echo "$CMD"; echo '} >> "$log" 2>&1'
+        echo 'echo "=== exited $(date "+%Y-%m-%d %H:%M:%S") ===" >> "$log"'
+      } > "$DAEMON_SRV/${NAME}.sh"
+      chmod +x "$DAEMON_SRV/${NAME}.sh" 2>/dev/null
+      rm -f "$DAEMON_SRV/${NAME}.log"
+      bridge-run -c "$CLIENT" "mkdir -p '${DAEMON_LOCAL}'; chmod +x '${DAEMON_LOCAL}/${NAME}.sh'; \
+echo \$\$ > '${DAEMON_LOCAL}/${NAME}.pid'; \
+(setsid '${DAEMON_LOCAL}/${NAME}.sh' >/dev/null 2>&1 </dev/null &) 2>/dev/null \
+  || (nohup '${DAEMON_LOCAL}/${NAME}.sh' >/dev/null 2>&1 </dev/null &); \
+echo 'started: ${NAME}'"
+    fi ;;
+
+  log)  tail -n "${1:-40}" "$DAEMON_SRV/${NAME}.log" 2>/dev/null || echo "(无日志)" ;;
+
+  stop)
+    if [ "$OS" = "windows" ]; then
+      bridge-run -c "$CLIENT" "schtasks /end /tn 'bridge_${CLIENT}_${NAME}' 2>&1 | Out-Null
+schtasks /delete /tn 'bridge_${CLIENT}_${NAME}' /f 2>&1 | Out-Null
+Write-Output 'stopped: ${NAME}'"
+    else
+      bridge-run -c "$CLIENT" "pkill -f '${DAEMON_LOCAL}/${NAME}.sh' && echo 'stopped: ${NAME}' || echo 'not running'"
+    fi ;;
+
+  list)
+    if [ "$OS" = "windows" ]; then
+      bridge-run -c "$CLIENT" "schtasks /query /fo table 2>\$null | Select-String 'bridge_${CLIENT}_'"
+    else
+      bridge-run -c "$CLIENT" "pgrep -fl '${DAEMON_LOCAL}/' || echo '(无)'"
+    fi ;;
+  *) echo "用法: bridge-daemon start|log|stop|list <名字> [-c 客户端] ..."; exit 1 ;;
+esac
