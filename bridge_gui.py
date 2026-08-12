@@ -235,6 +235,7 @@ class Server:
         self._warned = False
         self._retry_at = 0.0      # 下次允许重连的时刻（指数退避）
         self._retry_n = 0         # 连续失败次数
+        self._err = None          # 隧道进程的 stderr 临时文件
 
     @property
     def sid(self):
@@ -297,7 +298,8 @@ class Server:
         ]
         rc, out = self.on_server(" ".join(args), 30)
         if rc != 0:
-            return None, (out.strip() or "注册失败")
+            msg = " / ".join([l.strip() for l in out.splitlines() if l.strip()][-3:])
+            return None, (msg or f"ssh 返回 {rc}，无输出")
         port = None
         for line in out.splitlines():
             if line.startswith("PORT="):
@@ -322,10 +324,15 @@ class Server:
         if ident:
             args += ["-i", os.path.expanduser(ident)]
         args.append(self.alias)
+        # stderr 落到临时文件：进程退出时读出来放进日志，
+        # 否则用户只看到 "code 255" 却不知道是主机不可达、认证失败还是转发被拒
+        self._err = tempfile.NamedTemporaryFile(prefix="bridge-tunnel-", suffix=".log",
+                                                delete=False, mode="w+b")
         self.tunnel_proc = subprocess.Popen(
-            args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            args, stdout=subprocess.DEVNULL, stderr=self._err,
             stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
         self.tunnel_since = time.time()
+        self.log(f"[{self.label}] 隧道命令: {' '.join(args[-3:])}")
 
     def tunnel_kill(self):
         p = self.tunnel_proc
@@ -352,10 +359,37 @@ class Server:
             code = p.returncode
             self.tunnel_proc = None
             self.tunnel_since = None
+            detail = self._read_tunnel_err()
             self.log(f"[{self.label}] 隧道进程退出 (code {code})", "warn")
+            for line in detail:
+                self.log(f"    {line}", "error")
+            if code == 255 and not detail:
+                self.log("    SSH 通用错误。终端手动跑一次看详情： "
+                         f"ssh -N -v {self.alias}", "warn")
         if self.port_ok:
             return {"ok": True, "text": "已连接（外部）", "owner": "external"}
         return {"ok": False, "text": "未连接", "owner": None}
+
+    def _read_tunnel_err(self):
+        """取隧道进程的 stderr（最多 6 行有效信息）"""
+        f = getattr(self, "_err", None)
+        if f is None:
+            return []
+        try:
+            f.flush()
+            f.seek(0)
+            raw = f.read().decode("utf-8", "replace")
+            f.close()
+            os.unlink(f.name)
+        except Exception:  # noqa: BLE001
+            raw = ""
+        finally:
+            self._err = None
+        lines = [l.strip() for l in raw.splitlines() if l.strip()]
+        # 过滤掉无信息量的噪音
+        drop = ("Warning: Permanently added", "debug1:", "debug2:", "debug3:")
+        lines = [l for l in lines if not l.startswith(drop)]
+        return lines[-6:]
 
     # ---- 状态
     def read_status_file(self):
@@ -908,7 +942,9 @@ class BridgeApp:
             port, err = srv.register()
             if err:
                 self.log(f"  登记失败: {err}", "error")
-                self.log("  服务器上可能还没装 bridge-register，请先跑 bridge-install.sh", "warn")
+                self.log(f"  自查 1：终端能否连上 →  ssh {srv.alias} echo ok", "warn")
+                self.log(f"  自查 2：服务器上是否装了工具 →  ssh {srv.alias} 'which bridge-register'", "warn")
+                self.log("  自查 3：没装的话在服务器上跑 bridge-install.sh", "warn")
                 return
             self.log(f"  已登记，分配端口 {port}")
             self._persist()
@@ -1105,7 +1141,8 @@ class BridgeApp:
 
     def _refresh_ui(self):
         col = C_OK if self.sshd["ok"] else (C_NA if self.sshd["ok"] is None else C_BAD)
-        self.lbl_sshd.configure(text=f"● Windows SSH 服务: {self.sshd['text']}", foreground=col)
+        svc = {"windows": "Windows SSH 服务", "macos": "远程登录(sshd)"}.get(PLATFORM, "sshd")
+        self.lbl_sshd.configure(text=f"● {svc}: {self.sshd['text']}", foreground=col)
         if self.update_ready:
             self.btn_reload.configure(text="重载 ●", fg="#fff", bg=C_WARN,
                                       activebackground=C_WARN, activeforeground="#fff")
