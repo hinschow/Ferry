@@ -704,17 +704,26 @@ class BridgeApp:
     # ------------------------------------------------------------ 工具
 
     def log(self, msg, level="info"):
-        self.msgq.put((time.strftime("%H:%M:%S"), str(msg), level))
+        self.msgq.put(("log", (time.strftime("%H:%M:%S"), str(msg), level)))
 
     def _drain(self):
+        """唯一允许操作 Tk 的入口 —— 工作线程一律通过队列传消息进来。
+
+        不要在工作线程里调 root.after()：after 本身就是 Tk 调用，
+        macOS 的 Tk 对跨线程调用会直接崩溃（表现为「Python 意外退出」）。
+        """
         try:
             while True:
-                ts, msg, level = self.msgq.get_nowait()
-                self.txt.configure(state="normal")
-                self.txt.insert("end", ts + "  ", ("ts",))
-                self.txt.insert("end", msg + "\n", (level,) if level != "info" else ())
-                self.txt.see("end")
-                self.txt.configure(state="disabled")
+                kind, payload = self.msgq.get_nowait()
+                if kind == "log":
+                    ts, msg, level = payload
+                    self.txt.configure(state="normal")
+                    self.txt.insert("end", ts + "  ", ("ts",))
+                    self.txt.insert("end", msg + "\n", (level,) if level != "info" else ())
+                    self.txt.see("end")
+                    self.txt.configure(state="disabled")
+                elif kind == "busy":
+                    self._set_busy(payload)
         except queue.Empty:
             pass
         self.root.after(200, self._drain)
@@ -736,7 +745,7 @@ class BridgeApp:
             except Exception as exc:  # noqa: BLE001
                 self.log(f"操作异常: {exc}", "error")
             finally:
-                self.root.after(0, lambda: self._set_busy(False))
+                self.msgq.put(("busy", False))     # 经队列回到主线程，不直接碰 Tk
         threading.Thread(target=wrapper, daemon=True).start()
 
     # ------------------------------------------------------------ 轮询
