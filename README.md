@@ -39,13 +39,23 @@
 
 前置：Ubuntu/Debian、root 权限、支持 FUSE（`/dev/fuse` 存在）。
 
-```bash
-# 1. 把 bridge-install.sh 传到服务器
-scp bridge-install.sh root@服务器IP:/root/
+**方式一：直接 clone（推荐）**
 
-# 2. 执行 —— 不需要任何参数
-bash /root/bridge-install.sh
+```bash
+git clone <本仓库地址> ~/Ferry
+cd ~/Ferry
+bash bridge-install.sh          # 不需要任何参数
 ```
+
+**方式二：只传一个文件**
+
+```bash
+scp bridge-install.sh root@服务器IP:/root/
+ssh root@服务器IP 'bash /root/bridge-install.sh'
+```
+
+> `bridge-install.sh` 是自包含的，16 个工具都打包在里面，单独一个文件就能装。
+> clone 整个仓库的好处是以后 `git pull` 就能更新。
 
 安装脚本会：装 `sshfs` → 建目录 → **生成该服务器专属密钥** → 装好全部命令行工具 →
 **打印出你在本地电脑上要执行的命令**（含公钥、服务器 IP，可直接复制）。
