@@ -236,6 +236,7 @@ class Server:
         self._retry_at = 0.0      # 下次允许重连的时刻（指数退避）
         self._retry_n = 0         # 连续失败次数
         self._err = None          # 隧道进程的 stderr 临时文件
+        self._fixed_pipe = False  # 是否已尝试补挂状态管道
 
     @property
     def sid(self):
@@ -510,6 +511,7 @@ class Server:
                 self.mounts = found
             self._probes = 0
             self._warned = False
+            self._fixed_pipe = False
             return
 
         now = time.time()
@@ -966,6 +968,14 @@ class BridgeApp:
                             self.log(f"[{srv.label}] 隧道已恢复")
                             srv._retry_n = 0
                             srv._retry_at = 0.0
+                            threading.Thread(target=self._ensure_server_side,
+                                             args=(srv,), daemon=True).start()
+                        # 隧道在但状态管道一直读不到 —— 补做一次服务器端初始化
+                        elif up and srv._probes >= 3 and not srv._fixed_pipe:
+                            srv._fixed_pipe = True
+                            self.log(f"[{srv.label}] 状态管道未就绪，正在补挂…", "warn")
+                            threading.Thread(target=self._ensure_server_side,
+                                             args=(srv,), daemon=True).start()
             except Exception as exc:  # noqa: BLE001
                 self.log(f"本地轮询异常: {exc}", "error")
             time.sleep(CFG.get("poll_local", 2))
@@ -978,6 +988,24 @@ class BridgeApp:
                 except Exception as exc:  # noqa: BLE001
                     self.log(f"[{srv.label}] 轮询异常: {exc}", "error")
             time.sleep(CFG.get("poll_remote", 3))
+
+    def _ensure_server_side(self, srv):
+        """隧道通了之后，服务器端还要做两件事：把状态目录挂过去、把守护起来。
+        「启动隧道」按钮和自动重连都必须走这里 —— 早先只有按钮做了，
+        导致自动重连恢复的隧道永远是「状态管道未挂载」。"""
+        try:
+            mid = machine_id()
+            rc, out = srv.on_server(
+                f"bridge-mount -c {mid} {shlex_quote(srv.status_dir)} "
+                f"/root/.winbridge/status/{mid} 2>&1; "
+                f"bridge-statusd start -c {mid} 2>&1", 60)
+            bad = [l for l in out.splitlines() if l.startswith("ERR|")]
+            if bad:
+                self.log(f"[{srv.label}] 状态管道挂载失败: {bad[0][4:]}", "error")
+            return not bad
+        except Exception as exc:  # noqa: BLE001
+            self.log(f"[{srv.label}] 服务器端初始化异常: {exc}", "error")
+            return False
 
     def _auto_boot(self):
         time.sleep(5)
@@ -992,7 +1020,7 @@ class BridgeApp:
                 srv.tunnel_spawn()
                 srv.want_up = True
                 time.sleep(2)
-                srv.on_server(f"bridge-statusd start -c {machine_id()}", 30)
+                self._ensure_server_side(srv)
             except Exception as exc:  # noqa: BLE001
                 self.log(f"[{srv.label}] 自启失败: {exc}", "error")
 
@@ -1103,10 +1131,7 @@ class BridgeApp:
             srv.want_up = True
             time.sleep(2)
             # 让服务器挂上状态目录并起守护，之后状态就走零 SSH 通道
-            mid = machine_id()
-            srv.on_server(f"bridge-mount -c {mid} {shlex_quote(srv.status_dir)} "
-                          f"/root/.winbridge/status/{mid} >/dev/null 2>&1; "
-                          f"bridge-statusd start -c {mid}", 60)
+            self._ensure_server_side(srv)
             srv.poll()
         self._work(job)
 
@@ -1136,7 +1161,7 @@ class BridgeApp:
             srv.tunnel_spawn()
             srv.want_up = True
             time.sleep(2)
-            srv.on_server(f"bridge-statusd start -c {machine_id()}", 30)
+            self._ensure_server_side(srv)
             srv.poll()
         self._work(job)
 
