@@ -417,6 +417,15 @@ class Server:
 
         host = cfg.get("hostname", "?")
         self.log(f"    别名 {self.alias} → {cfg.get('user','?')}@{host}:{cfg.get('port','22')}")
+        if host == self.alias:
+            self.log(f"    ❌ ~/.ssh/config 里没有 'Host {self.alias}' 配置块！", "error")
+            self.log("       SSH 把别名当成真实主机名去解析了，所以连不上。", "error")
+            want = self.conf.get("host") or "<服务器IP>"
+            self.log(f"       补上配置：", "error")
+            self.log(f"         Host {self.alias}", "error")
+            self.log(f"             HostName {want}", "error")
+            self.log(f"             User root", "error")
+            return
         ident = cfg.get("identityfile", "")
         if ident:
             path = os.path.expanduser(ident.strip("'\""))
@@ -554,7 +563,7 @@ class ServerDialog(tk.Toplevel):
     FIELDS = [
         ("ssh_alias",   "SSH 别名",       "~/.ssh/config 里的 Host 名，如 myserver（唯一必填项）"),
         ("name",        "显示名称(可选)", "留空则用别名"),
-        ("host",        "服务器地址(可选)", "仅用于界面显示"),
+        ("host",        "服务器地址", "IP 或域名；SSH 别名缺配置时用它自动补全"),
         ("identity",    "私钥路径(可选)", "留空则用 SSH 别名里配置的"),
     ]
     # 用户名/系统/隧道端口由客户端启动隧道时自动上报给服务器，无需手填
@@ -591,6 +600,34 @@ class ServerDialog(tk.Toplevel):
         self.grab_set()
         self.wait_window(self)
 
+    def _append_ssh_config(self, alias, host):
+        """把缺失的 Host 块追加到 ~/.ssh/config（纯追加，先备份）"""
+        try:
+            cfg = os.path.join(os.path.expanduser("~"), ".ssh", "config")
+            os.makedirs(os.path.dirname(cfg), exist_ok=True)
+            if os.path.exists(cfg):
+                shutil.copy2(cfg, cfg + ".bak")
+            with open(cfg, "a", encoding="utf-8") as fh:
+                fh.write(f"\nHost {alias}\n"
+                         f"    HostName {host}\n"
+                         f"    User root\n"
+                         f"    ServerAliveInterval 30\n"
+                         f"    ServerAliveCountMax 3\n"
+                         f"    StrictHostKeyChecking accept-new\n")
+            try:
+                os.chmod(cfg, 0o600)
+            except OSError:
+                pass
+            messagebox.showinfo(
+                APP_NAME,
+                f"已在 ~/.ssh/config 追加：\n\nHost {alias}\n    HostName {host}\n    User root\n\n"
+                f"若该服务器用非 root 账户或需要指定私钥，请自行编辑该文件。",
+                parent=self)
+            return True
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror(APP_NAME, f"写入 ~/.ssh/config 失败：{exc}", parent=self)
+            return False
+
     def _save(self):
         vals = {k: v.get().strip() for k, v in self.vars.items()}
         if not vals["ssh_alias"]:
@@ -598,6 +635,31 @@ class ServerDialog(tk.Toplevel):
                 APP_NAME, "SSH 别名必填 —— 它必须是你 ~/.ssh/config 里已配置的 Host。",
                 parent=self)
             return
+        # 别名必须在 ~/.ssh/config 里真实存在，否则 SSH 会把它当主机名解析，
+        # 用户会看到一串莫名其妙的连接失败。这里当场拦住。
+        rc, gout = run(["ssh", "-G", vals["ssh_alias"]], 15)
+        resolved = ""
+        for line in gout.splitlines():
+            if line.startswith("hostname "):
+                resolved = line.split(None, 1)[1].strip()
+                break
+        if resolved == vals["ssh_alias"]:
+            tip = (f"~/.ssh/config 里找不到 “Host {vals['ssh_alias']}”。\n\n"
+                   f"SSH 会把别名当成真实主机名去解析，多半连不上。\n\n")
+            if vals["host"]:
+                tip += (f"要用你填的服务器地址 {vals['host']} 自动补一段配置吗？\n"
+                        f"（会追加到 ~/.ssh/config，不影响已有内容）")
+                if messagebox.askyesno(APP_NAME, tip, parent=self):
+                    if not self._append_ssh_config(vals["ssh_alias"], vals["host"]):
+                        return
+                else:
+                    return
+            else:
+                messagebox.showwarning(
+                    APP_NAME, tip + "请先在 ~/.ssh/config 里配好该 Host，或填写「服务器地址」让我代劳。",
+                    parent=self)
+                return
+
         out = dict(self.conf)          # 保留已分配的 tunnel_port 等运行期字段
         out.update({
             "id": self.conf.get("id") or vals["ssh_alias"],
