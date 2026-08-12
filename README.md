@@ -52,8 +52,19 @@ bridge-invite --name 我的Mac
 客户端会自动做完这些：授权服务器公钥到本机 · 保存登录密钥 ·
 写好 SSH 别名 · 加入服务器列表 · 建立隧道。**Windows 和 macOS 流程完全一样。**
 
-> ⚠️ 接入码包含服务器的登录凭据，只发给你信任的机器。
-> 撤销：服务器上 `bridge-invite --revoke 我的Mac`，该客户端立即失效。
+**每台机器一张,互不影响。** 接入码为每台机器单独生成一把密钥并追加到
+`authorized_keys`,不会覆盖已有的:
+
+```bash
+bridge-invite --name mac-mini        # 给 Mac
+bridge-invite --name win-desktop     # 给 Windows，两者独立并存
+bridge-invite --list                 # 看已发放的和是否有效
+bridge-invite --revoke mac-mini      # 只吊销这一台，其它照常
+```
+
+> 注意:`--name` 相同会复用同一把钥匙,给每台机器起不同名字。
+>
+> ⚠️ 接入码包含服务器的登录凭据,只发给你信任的机器。
 
 前提：本机 SSH 服务要开着（服务器靠它回连）
 - **Windows** 管理员 PowerShell：`Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0; Start-Service sshd; Set-Service sshd -StartupType Automatic`

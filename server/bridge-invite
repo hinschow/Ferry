@@ -7,18 +7,41 @@
 #
 # ⚠️ 接入码等同于本服务器的登录凭据，只发给你信任的机器。
 set -e
-NAME=""; HOST=""; REVOKE=""
+NAME=""; HOST=""; REVOKE=""; LIST=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --name) NAME="$2"; shift 2 ;;
     --host) HOST="$2"; shift 2 ;;
     --revoke) REVOKE="$2"; shift 2 ;;
-    *) echo "用法: bridge-invite [--name 显示名] [--host 对外地址] [--revoke 客户端名]"; exit 1 ;;
+    --list|-l) LIST=1; shift ;;
+    *) echo "用法: bridge-invite [--name 名字] [--host 对外地址]"
+       echo "      bridge-invite --list              列出已发放的接入码"
+       echo "      bridge-invite --revoke <名字>     撤销某台机器"
+       exit 1 ;;
   esac
 done
 
 KEYDIR=/root/.winbridge/invites
 mkdir -p "$KEYDIR"; chmod 700 "$KEYDIR"
+
+# ---- 列出 ----
+if [ -n "$LIST" ]; then
+  n=0
+  printf "  %-22s %-12s %s\n" "名字" "状态" "发放时间"
+  printf "  %-22s %-12s %s\n" "──────────────────────" "────────────" "───────────────────"
+  for f in "$KEYDIR"/*.pub; do
+    [ -e "$f" ] || continue
+    nm=$(basename "$f" .pub)
+    fp=$(awk '{print $2}' "$f")
+    if grep -qF "$fp" /root/.ssh/authorized_keys 2>/dev/null; then st="✅ 有效"; else st="⚪ 已失效"; fi
+    printf "  %-22s %-12s %s\n" "$nm" "$st" "$(date -r "$f" '+%Y-%m-%d %H:%M')"
+    n=$((n+1))
+  done
+  [ "$n" = 0 ] && echo "  （还没有发放过接入码）"
+  echo
+  echo "  撤销某台： bridge-invite --revoke <名字>"
+  exit 0
+fi
 
 # ---- 撤销 ----
 if [ -n "$REVOKE" ]; then
