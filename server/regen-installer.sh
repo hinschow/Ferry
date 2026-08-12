@@ -1,6 +1,6 @@
 #!/bin/bash
 OUT="${1:-/root/.winbridge/bridge-install.sh}"
-TOOLS="bridge-run bridge-mount bridge-umount bridge-mounts bridge-check bridge-grep bridge-git bridge-reset bridge-statusd bridge-daemon bridge-register bridge-add-client bridge-index bridge-find bridge-guard bridge-sync-md"
+TOOLS="bridge-run bridge-mount bridge-umount bridge-mounts bridge-check bridge-grep bridge-git bridge-reset bridge-statusd bridge-daemon bridge-register bridge-add-client bridge-index bridge-find bridge-guard bridge-sync-md bridge-invite"
 {
 sed -n '1,/^echo "==> 4\/5 安装命令行工具"$/p' /root/.winbridge/bridge-install.sh.tpl
 echo ""

@@ -1,0 +1,85 @@
+#!/bin/bash
+# bridge-invite [--name <显示名>] [--host <对外地址>] [--revoke <客户端名>]
+#
+# 生成一段「接入码」：在客户端控制台里粘贴即可完成全部配置。
+# 码里包含：服务器地址、服务器公钥（授权到客户端本机）、
+#          一把专供该客户端登录本服务器的私钥。
+#
+# ⚠️ 接入码等同于本服务器的登录凭据，只发给你信任的机器。
+set -e
+NAME=""; HOST=""; REVOKE=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --name) NAME="$2"; shift 2 ;;
+    --host) HOST="$2"; shift 2 ;;
+    --revoke) REVOKE="$2"; shift 2 ;;
+    *) echo "用法: bridge-invite [--name 显示名] [--host 对外地址] [--revoke 客户端名]"; exit 1 ;;
+  esac
+done
+
+KEYDIR=/root/.winbridge/invites
+mkdir -p "$KEYDIR"; chmod 700 "$KEYDIR"
+
+# ---- 撤销 ----
+if [ -n "$REVOKE" ]; then
+  K="$KEYDIR/$REVOKE"
+  [ -f "$K.pub" ] || { echo "找不到该接入码: $REVOKE"; exit 1; }
+  FP=$(awk '{print $2}' "$K.pub")
+  grep -vF "$FP" /root/.ssh/authorized_keys > "$KEYDIR/.tmp" 2>/dev/null || true
+  mv "$KEYDIR/.tmp" /root/.ssh/authorized_keys
+  chmod 600 /root/.ssh/authorized_keys
+  rm -f "$K" "$K.pub"
+  echo "已撤销 $REVOKE —— 该客户端不再能登录本服务器"
+  exit 0
+fi
+
+[ -z "$NAME" ] && NAME="client-$(date +%m%d%H%M)"
+NAME=$(printf '%s' "$NAME" | tr -cd '[:alnum:]._-' | cut -c1-32)
+[ -z "$HOST" ] && HOST=$(curl -s -m 5 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
+[ -z "$HOST" ] && { echo "取不到本机对外地址，请用 --host 指定"; exit 1; }
+
+# ---- 客户端登录本服务器用的密钥（每张接入码一把，可单独撤销）----
+K="$KEYDIR/$NAME"
+if [ ! -f "$K" ]; then
+  ssh-keygen -t ed25519 -f "$K" -N '' -C "ferry-invite-$NAME" -q
+  mkdir -p /root/.ssh && chmod 700 /root/.ssh
+  touch /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys
+  cat "$K.pub" >> /root/.ssh/authorized_keys
+fi
+
+# ---- 服务器公钥（客户端要授权它，服务器才能回连）----
+SRVPUB=$(cat /root/.ssh/id_bridge.pub 2>/dev/null || cat /root/.ssh/id_win.pub 2>/dev/null)
+[ -z "$SRVPUB" ] && { echo "找不到服务器公钥，请先跑 bridge-install.sh"; exit 1; }
+
+TOKEN=$(python3 - "$HOST" "$NAME" "$SRVPUB" "$K" <<'PY'
+import base64, json, sys, zlib
+host, name, srvpub, keypath = sys.argv[1:5]
+payload = {
+    "v": 1,
+    "host": host,
+    "port": 22,
+    "user": "root",
+    "name": name,
+    "srv_pub": srvpub.strip(),
+    "cli_key": open(keypath, encoding="utf-8").read(),
+}
+raw = json.dumps(payload, separators=(",", ":")).encode()
+print("FERRY1:" + base64.urlsafe_b64encode(zlib.compress(raw, 9)).decode())
+PY
+)
+
+cat <<TIPEOF
+
+════════════════════════════════════════════════════════════════
+  接入码已生成    服务器 $HOST    标识 $NAME
+════════════════════════════════════════════════════════════════
+
+$TOKEN
+
+────────────────────────────────────────────────────────────────
+  用法：打开客户端 → 「添加服务器…」→ 点「粘贴接入码」→ 粘贴上面整段
+
+  ⚠️ 这段码包含本服务器的登录凭据，只发给你信任的机器。
+     撤销：  bridge-invite --revoke $NAME
+════════════════════════════════════════════════════════════════
+TIPEOF

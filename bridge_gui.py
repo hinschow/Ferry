@@ -212,6 +212,109 @@ def run(args, timeout=20):
         return -1, str(exc)
 
 
+# ================================================================ 接入码
+
+def parse_invite(text):
+    """解析服务器生成的接入码，返回 dict 或抛异常"""
+    import base64, zlib
+    t = "".join(text.split())
+    if not t.startswith("FERRY1:"):
+        raise ValueError("这不是接入码（应以 FERRY1: 开头）")
+    raw = zlib.decompress(base64.urlsafe_b64decode(t[7:]))
+    d = json.loads(raw.decode("utf-8"))
+    for k in ("host", "srv_pub", "cli_key"):
+        if not d.get(k):
+            raise ValueError(f"接入码缺少字段: {k}")
+    return d
+
+
+def apply_invite(d, log=lambda *_a, **_k: None):
+    """把接入码落地：授权服务器公钥、保存登录私钥、写 SSH 别名。
+    返回 (alias, 提示列表)。全部操作都是追加式，且先备份。"""
+    import re as _re
+    tips = []
+    home = os.path.expanduser("~")
+    sshdir = os.path.join(home, ".ssh")
+    os.makedirs(sshdir, exist_ok=True)
+    try:
+        os.chmod(sshdir, 0o700)
+    except OSError:
+        pass
+
+    host = d["host"]
+    alias = "ferry-" + _re.sub(r"[^A-Za-z0-9]", "-", host).strip("-")
+
+    # 1) 本机登录服务器用的私钥
+    keypath = os.path.join(sshdir, f"ferry-{_re.sub(r'[^A-Za-z0-9]', '-', host).strip('-')}")
+    with open(keypath, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(d["cli_key"] if d["cli_key"].endswith("\n") else d["cli_key"] + "\n")
+    try:
+        os.chmod(keypath, 0o600)
+    except OSError:
+        pass
+    tips.append(f"已保存登录密钥 {keypath}")
+
+    # 2) 服务器公钥授权到本机（服务器要靠它回连）
+    if IS_WIN:
+        ps = ("$g=(Get-LocalGroup -SID 'S-1-5-32-544').Name;"
+              "$a=[bool](Get-LocalGroupMember -Group $g -EA SilentlyContinue|"
+              "Where-Object{$_.Name -like \"*\\$env:USERNAME\"});"
+              "if($a){$f='C:\\ProgramData\\ssh\\administrators_authorized_keys'}"
+              "else{New-Item -ItemType Directory -Force -Path \"$env:USERPROFILE\\.ssh\"|Out-Null;"
+              "$f=\"$env:USERPROFILE\\.ssh\\authorized_keys\"};"
+              f"$k='{d['srv_pub']}';"
+              "if((Test-Path $f) -and (Select-String -Path $f -SimpleMatch $k -Quiet)){'SKIP'}"
+              "else{Add-Content $f $k -Encoding ASCII;'ADDED'};"
+              "if($a){icacls $f /inheritance:r /grant \"${g}:F\" /grant 'SYSTEM:F'|Out-Null};"
+              "Restart-Service sshd -EA SilentlyContinue")
+        rc, out = run(["powershell", "-NoLogo", "-NonInteractive", "-Command", ps], 60)
+        if "ADDED" in out:
+            tips.append("服务器公钥已授权到本机")
+        elif "SKIP" in out:
+            tips.append("服务器公钥已存在，跳过")
+        else:
+            tips.append("⚠️ 授权公钥失败，可能需要管理员权限运行本程序")
+    else:
+        ak = os.path.join(sshdir, "authorized_keys")
+        cur = open(ak, encoding="utf-8").read() if os.path.exists(ak) else ""
+        if d["srv_pub"].split()[1] in cur:
+            tips.append("服务器公钥已存在，跳过")
+        else:
+            with open(ak, "a", encoding="utf-8") as fh:
+                fh.write(("" if not cur or cur.endswith("\n") else "\n") + d["srv_pub"] + "\n")
+            try:
+                os.chmod(ak, 0o600)
+            except OSError:
+                pass
+            tips.append("服务器公钥已授权到本机")
+
+    # 3) SSH 别名
+    cfg = os.path.join(sshdir, "config")
+    cur = open(cfg, encoding="utf-8").read() if os.path.exists(cfg) else ""
+    if _re.search(rf"^\s*Host\s+{_re.escape(alias)}\s*$", cur, _re.M):
+        tips.append(f"SSH 别名 {alias} 已存在")
+    else:
+        if os.path.exists(cfg):
+            shutil.copy2(cfg, cfg + ".bak")
+        with open(cfg, "a", encoding="utf-8") as fh:
+            fh.write(f"\nHost {alias}\n"
+                     f"    HostName {host}\n"
+                     f"    User {d.get('user', 'root')}\n"
+                     f"    Port {d.get('port', 22)}\n"
+                     f"    IdentityFile {keypath}\n"
+                     f"    IdentitiesOnly yes\n"
+                     f"    ServerAliveInterval 30\n"
+                     f"    ServerAliveCountMax 3\n"
+                     f"    StrictHostKeyChecking accept-new\n")
+        try:
+            os.chmod(cfg, 0o600)
+        except OSError:
+            pass
+        tips.append(f"SSH 别名 {alias} → {d.get('user','root')}@{host}")
+
+    return alias, tips
+
+
 # ================================================================ 单台服务器
 
 class Server:
@@ -561,6 +664,74 @@ class Server:
                     mp, src = line.split("\t", 1)
                     found[from_sftp_path(src.strip())] = mp.strip()
             self.mounts = found
+
+
+# ================================================================ 接入码对话框
+
+class InviteDialog(tk.Toplevel):
+    """粘贴接入码 —— 添加服务器的默认方式"""
+
+    def __init__(self, parent, fonts):
+        super().__init__(parent)
+        self.result = None
+        self.title("粘贴接入码")
+        self.transient(parent)
+        self.resizable(False, False)
+        self.configure(bg=C_CARD)
+
+        f_base, f_sub, f_mono, f_big = fonts
+        wrap = tk.Frame(self, bg=C_CARD, padx=22, pady=18)
+        wrap.pack(fill="both", expand=True)
+
+        tk.Label(wrap, text="粘贴接入码", bg=C_CARD, fg=C_TEXT,
+                 font=f_big).pack(anchor="w")
+        tk.Label(wrap, bg=C_CARD, fg=C_MUTED, font=f_sub, justify="left",
+                 text="在服务器上执行  bridge-invite  获取，把输出的整段粘到下面。\n"
+                      "它会自动完成：授权服务器公钥、保存登录密钥、写 SSH 别名。").pack(
+            anchor="w", pady=(4, 12))
+
+        self.txt = tk.Text(wrap, width=64, height=7, font=f_mono, wrap="char",
+                           relief="flat", bd=1, highlightthickness=1,
+                           highlightbackground=C_LINE, bg="#fbfcfd")
+        self.txt.pack(fill="both", expand=True)
+        self.txt.focus_set()
+
+        tk.Label(wrap, bg=C_CARD, fg=C_WARN, font=f_sub, justify="left",
+                 text="⚠️ 接入码包含服务器登录凭据，勿外传。").pack(anchor="w", pady=(8, 0))
+
+        bar = tk.Frame(wrap, bg=C_CARD)
+        bar.pack(fill="x", pady=(14, 0))
+        tk.Button(bar, text="取消", command=self.destroy, relief="flat", bd=0,
+                  bg=C_CARD, fg=C_MUTED, activebackground=C_CARD, cursor="hand2",
+                  padx=14, pady=6, font=f_base).pack(side="right")
+        tk.Button(bar, text="接入", command=self._go, relief="flat", bd=0,
+                  bg=C_ACCENT, fg="#ffffff", activebackground="#1249ab",
+                  activeforeground="#fff", cursor="hand2", padx=22, pady=6,
+                  font=f_base).pack(side="right", padx=(0, 8))
+        tk.Button(bar, text="从剪贴板读取", command=self._paste, relief="flat", bd=0,
+                  bg=C_CARD, fg=C_ACCENT, activebackground=C_CARD, cursor="hand2",
+                  padx=10, pady=6, font=f_sub).pack(side="left")
+
+        self.grab_set()
+        self.wait_window(self)
+
+    def _paste(self):
+        try:
+            self.txt.delete("1.0", "end")
+            self.txt.insert("1.0", self.clipboard_get())
+        except Exception:  # noqa: BLE001
+            messagebox.showinfo("粘贴接入码", "剪贴板里没有文本。", parent=self)
+
+    def _go(self):
+        raw = self.txt.get("1.0", "end").strip()
+        if not raw:
+            return
+        try:
+            self.result = parse_invite(raw)
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror("粘贴接入码", f"接入码无效：{exc}", parent=self)
+            return
+        self.destroy()
 
 
 # ================================================================ 服务器编辑对话框
@@ -1167,6 +1338,20 @@ class BridgeApp:
     # ------------------------------------------------------------ 服务器动作
 
     def act_add_server(self):
+        """默认走接入码；需要时可切到手工填写"""
+        choice = messagebox.askyesnocancel(
+            APP_NAME,
+            "用接入码添加？（推荐）\n\n"
+            "在服务器上执行  bridge-invite  会打印一段接入码，\n"
+            "粘贴进来即可自动完成全部配置。\n\n"
+            "  是   → 粘贴接入码\n"
+            "  否   → 手工填写别名等信息\n"
+            "  取消 → 不添加")
+        if choice is None:
+            return
+        if choice:
+            self._add_by_invite()
+            return
         dlg = ServerDialog(self.root)
         if not dlg.result:
             return
@@ -1183,6 +1368,53 @@ class BridgeApp:
                  f"{shlex_quote(os.path.join(STATUS_ROOT, srv.sid))} "
                  f"/root/.winbridge/status/{machine_id()}")
         self._refresh_servers()
+
+    def _add_by_invite(self):
+        dlg = InviteDialog(self.root, (self.f_base, self.f_sub, self.f_mono, self.f_big))
+        if not dlg.result:
+            return
+        d = dlg.result
+
+        def job():
+            self.log(f"接入 {d['host']} …")
+            try:
+                alias, tips = apply_invite(d, self.log)
+            except Exception as exc:  # noqa: BLE001
+                self.log(f"  接入失败: {exc}", "error")
+                return
+            for t in tips:
+                self.log(f"  {t}")
+
+            if any(x.sid == alias for x in self.servers):
+                self.log("  该服务器已在列表中", "warn")
+                return
+            conf = {"id": alias, "name": d.get("name") or d["host"],
+                    "ssh_alias": alias, "host": d["host"], "identity": None,
+                    "mounts": [], "auto_tunnel": True, "enabled": True}
+            srv = Server(conf, self.log)
+            srv.ensure_status_dir()
+            self.servers.append(srv)
+            self._persist()
+            self.log(f"  已添加 {srv.label}")
+
+            # 直接连上，省掉再点一次
+            rc, out = run(["ssh", "-n", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15",
+                           "-o", "StrictHostKeyChecking=accept-new", alias, "echo ok"], 30)
+            if rc != 0 or "ok" not in out:
+                self.log(f"  连通性测试失败：{out.strip()[:140]}", "error")
+                srv.diagnose(out)
+                return
+            self.log("  连通性正常，建立隧道…")
+            try:
+                srv.tunnel_spawn()
+                srv.want_up = True
+                time.sleep(2)
+                self._ensure_server_side(srv)
+                srv.poll()
+                self.log("  ✅ 接入完成，可以「添加文件夹…」挂目录了")
+            except Exception as exc:  # noqa: BLE001
+                self.log(f"  建立隧道失败: {exc}", "error")
+        self._work(job)
 
     def act_edit_server(self):
         srv = self.current()

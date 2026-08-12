@@ -35,48 +35,50 @@
 
 ---
 
-## 二、一键接入（推荐）
+## 二、接入一台服务器（推荐做法）
 
-在**你的电脑**上,一条命令搞定两端:
+**服务器上执行一条命令：**
+
+```bash
+bridge-invite --name 我的Mac
+```
+
+它会打印一段接入码（`FERRY1:...`）。
+
+**客户端里粘贴：**
+
+打开控制台 → 「添加服务器…」→ 选「是（粘贴接入码）」→ 粘贴整段 → 完成。
+
+客户端会自动做完这些：授权服务器公钥到本机 · 保存登录密钥 ·
+写好 SSH 别名 · 加入服务器列表 · 建立隧道。**Windows 和 macOS 流程完全一样。**
+
+> ⚠️ 接入码包含服务器的登录凭据，只发给你信任的机器。
+> 撤销：服务器上 `bridge-invite --revoke 我的Mac`，该客户端立即失效。
+
+前提：本机 SSH 服务要开着（服务器靠它回连）
+- **Windows** 管理员 PowerShell：`Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0; Start-Service sshd; Set-Service sshd -StartupType Automatic`
+- **macOS**：系统设置 → 通用 → 共享 → 远程登录
+
+---
+
+## 三、其它部署方式
+
+**命令行一键**（本地终端跑，效果同上）
 
 ```bash
 python3 ferry-setup.py root@服务器IP
 ```
 
-它会依次完成:检查本机 Python/Tk → 检查本机 sshd → 连服务器装工具 →
-**自动取回服务器公钥并授权到本机**(不用你复制粘贴)→ 写好 SSH 别名 →
-生成客户端配置 → 启动界面。
-
-需要你手工介入的只有一处,脚本会明确停下来提示:
-
-- **Windows**:安装/启动 sshd 需要管理员权限(给出可直接粘贴的命令)
-- **macOS**:打开「系统设置 → 通用 → 共享 → 远程登录」
-
-> macOS 注意:必须用带 Tk 8.6+ 的 Python。系统/Xcode 自带的 Tk 8.5.9 会崩溃。
-> `brew install python-tk` 后用 `/opt/homebrew/bin/python3 ferry-setup.py ...`
-
----
-
-## 三、手工部署（想了解细节时用）
-
-**服务器端**
+**完全手工**（想了解每一步时用）
 
 ```bash
-git clone <本仓库地址> ~/Ferry && cd ~/Ferry
-bash bridge-install.sh          # 不需要任何参数
-```
+# 服务器
+git clone <本仓库地址> ~/Ferry && cd ~/Ferry && bash bridge-install.sh
 
-装完会打印服务器公钥和本地要执行的命令。
-
-**本地电脑**
-
-```powershell
 # Windows，管理员 PowerShell，一整行
 powershell -ExecutionPolicy Bypass -File setup-windows.ps1 -PubKey "公钥" -ServerHost <IP> -Alias <别名> -LoopbackOnly -AutoStart
-```
 
-```bash
-# macOS，先开「远程登录」
+# macOS
 bash setup-mac.sh --pubkey "公钥" --host <IP> --alias <别名> --autostart
 ```
 
