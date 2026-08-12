@@ -160,8 +160,10 @@ def main():
         fh.write(png(256, px(256)))
 
     with open(os.path.join(out_dir, "ferry.ico"), "wb") as fh:
-        fh.write(ico([(s, dib(s, px(s))) for s in (16, 32, 48, 64, 128)]
-                     + [(256, png(256, px(256)))]))
+        # 小尺寸用 DIB（兼容性最好，本身也小）；64 以上用 PNG，
+        # 否则光一个 128×128 的未压缩 DIB 就要 67 KB，占整个文件的六成
+        fh.write(ico([(s, dib(s, px(s))) for s in (16, 32, 48)]
+                     + [(s, png(s, px(s))) for s in (64, 128, 256)]))
 
     with open(os.path.join(out_dir, "ferry.icns"), "wb") as fh:
         fh.write(icns([(b"ic11", png(32, px(32))),      # 16pt @2x

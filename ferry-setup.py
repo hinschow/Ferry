@@ -152,18 +152,38 @@ def install_server(target, ident):
     if "INSTALLED" in out:
         ok("服务端工具已安装，跳过")
     else:
-        local_installer = os.path.join(HERE, "bridge-install.sh")
-        if not os.path.exists(local_installer):
+        # 安装脚本从同目录的 server/ 取工具，所以要把两者一起送过去。
+        # （早先安装脚本内嵌了一份工具副本，可以单文件 scp —— 但那份副本
+        #   和 server/ 老是漂移，已经取消。）
+        if not os.path.exists(os.path.join(HERE, "bridge-install.sh")):
             die("同目录下找不到 bridge-install.sh")
-        print("      上传并执行安装脚本…")
-        a = ["scp", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new"]
-        if ident:
-            a += ["-i", os.path.expanduser(ident)]
-        rc, out = run(a + [local_installer, f"{target}:/tmp/bridge-install.sh"], 180)
+        if not os.path.isdir(os.path.join(HERE, "server")):
+            die("同目录下找不到 server/ —— 请克隆整个仓库，别只拷单个脚本")
+        print("      打包并上传安装脚本…")
+        import tarfile, tempfile
+        fd, tgz = tempfile.mkstemp(suffix=".tgz")
+        os.close(fd)
+        try:
+            with tarfile.open(tgz, "w:gz") as tf:
+                tf.add(os.path.join(HERE, "bridge-install.sh"), "bridge-install.sh")
+                tf.add(os.path.join(HERE, "server"), "server")
+            a = ["scp", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new"]
+            if ident:
+                a += ["-i", os.path.expanduser(ident)]
+            rc, out = run(a + [tgz, f"{target}:/tmp/ferry-install.tgz"], 180)
+        finally:
+            try:
+                os.unlink(tgz)
+            except OSError:
+                pass
         if rc != 0:
             die(f"上传失败：{out.strip()[:160]}")
-        rc, out = ssh(target, "bash /tmp/bridge-install.sh 2>&1 | tail -40", 300, ident)
-        if rc != 0 or "5/5" not in out:
+        rc, out = ssh(target,
+                      "rm -rf /tmp/ferry-install && mkdir -p /tmp/ferry-install && "
+                      "tar xzf /tmp/ferry-install.tgz -C /tmp/ferry-install && "
+                      "bash /tmp/ferry-install/bridge-install.sh 2>&1 | tail -40; "
+                      "rm -rf /tmp/ferry-install /tmp/ferry-install.tgz", 300, ident)
+        if rc != 0 or "4/4" not in out:
             die(f"安装失败：\n{out.strip()[-400:]}")
         ok("服务端工具安装完成")
 

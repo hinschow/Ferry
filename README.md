@@ -281,7 +281,7 @@ sudo systemsetup -setremotelogin off   # macOS
 
 ```
 bridge_gui.py                 桌面客户端（三平台通用）
-bridge-install.sh             服务器端一键安装（server/ 打包而成）
+bridge-install.sh             服务器端安装（从 server/ 拷贝，无打包步骤）
 ferry-setup.py                本地一条命令全自动接入（可选路径）
 
 setup-windows.ps1             Windows：装 sshd + 收紧到回环 + 生成 Ferry.lnk
@@ -293,7 +293,7 @@ start-mac.command             零配置启动（不想生成 .app 时用）
 
 assets/ferry.png|.ico|.icns   应用图标
 tools/make-icons.py           重新生成图标（纯标准库）
-server/                       服务器端工具源码 + regen-installer.sh
+server/                       服务器端工具源码（唯一来源，改完直接生效）
 README.md                     本文件
 ```
 

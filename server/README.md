@@ -1,11 +1,11 @@
 # 服务器端工具源码
 
-这些是安装到 `/usr/local/bin/` 的脚本。`../bridge-install.sh` 是把它们打包后的
-一键安装器，由 `regen-installer.sh` 生成 —— **改完工具记得重新生成**：
+这些是安装到 `/usr/local/bin/` 的脚本，**这里就是唯一来源**。
+`../bridge-install.sh` 直接从本目录拷贝安装，改完这里就生效，没有打包步骤。
 
-```bash
-bash regen-installer.sh          # 会读取 /usr/local/bin/bridge-* 重新打包
-```
+> 2026-08-12 之前 `bridge-install.sh` 内嵌了一份工具副本（图的是单文件可 scp），
+> 需要 `regen-installer.sh` 重新生成。同一份代码存两遍，漂移过好几次 ——
+> 装到新服务器上的 `index-exclude.txt` 就一直是旧版。已取消。
 
 | 脚本 | 作用 |
 |---|---|
