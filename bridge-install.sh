@@ -1,18 +1,15 @@
 #!/bin/bash
 # ============================================================================
-#  Windows <-> Linux 桥接：服务器端一键安装
+#  Windows / macOS / Linux <-> Linux 服务器 桥接：服务器端一键安装
 #
-#  用法：把本文件放到新服务器上，然后
-#        bash bridge-install.sh <你的Windows用户名> [隧道端口，默认2222]
-#    例：bash bridge-install.sh yourname
+#  用法：把本文件放到新服务器上，直接执行（无需任何参数）
+#        bash bridge-install.sh
 #
-#  安装完会打印一段公钥和 Windows 侧要做的两步操作。
+#  安装完会打印一段公钥和本地电脑要做的操作。
+#  客户端首次连接时会自动上报自己的用户名/系统/工具路径，并领取一个
+#  不冲突的隧道端口 —— 服务器这边不需要预先配置任何机器信息。
 # ============================================================================
 set -e
-
-WIN_USER="${1:-}"
-WIN_PORT="${2:-2222}"
-[ -z "$WIN_USER" ] && { echo "用法: bash bridge-install.sh <Windows用户名> [隧道端口]"; exit 1; }
 
 echo "==> 1/5 检查依赖"
 if ! command -v sshfs >/dev/null 2>&1; then
@@ -26,27 +23,13 @@ echo "    sshfs $(sshfs --version 2>&1 | grep -o 'SSHFS version.*' || echo ok) /
 
 echo "==> 2/5 创建目录与配置"
 mkdir -p /root/.winbridge /root/mnt /root/local-project
-mkdir -p /root/.winbridge/clients /root/.winbridge/status
-CLIENT_NAME="${3:-client1}"
-CLIENT_OS="${4:-windows}"
-cat > /root/.winbridge/clients/${CLIENT_NAME}.conf <<CFGEOF
-NAME=$CLIENT_NAME
-OS=$CLIENT_OS
-USER="$WIN_USER"
-PORT=$WIN_PORT
-LABEL='$CLIENT_NAME'
-TOOL_DIR='D:\\bridge-console'
-CFGEOF
-echo "$CLIENT_NAME" > /root/.winbridge/current
-cat > /root/.winbridge/config <<CFGEOF
-WIN_USER="$WIN_USER"
-WIN_PORT=$WIN_PORT
-WIN_PROJECT=""                 # 默认项目路径（可留空）
+mkdir -p /root/.winbridge/clients /root/.winbridge/status /root/.winbridge/index /root/mnt
+# 不预建客户端档案 —— 客户端首次连接时由 bridge-register 用真实信息自动创建
+cat > /root/.winbridge/config <<'CFGEOF'
+# 全局默认值。每台本地机的信息在 clients/<机器名>.conf，由客户端自动上报生成。
 MOUNT_POINT=/root/local-project
-STATUS_DIR='/root/local-project/bridge-console'   # 状态文件只写这里，不碰用户项目
-TOOL_DIR_WIN='C:\\bridge-console'   # 客户端工具目录（客户端连上后会自动上报覆盖）
 CFGEOF
-echo "    /root/.winbridge/config"
+echo "    /root/.winbridge/config（客户端档案将由 bridge-register 自动创建）"
 
 echo "==> 3/5 生成专用密钥"
 if [ -f /root/.ssh/id_win ]; then
@@ -737,48 +720,38 @@ HOSTN=$(hostname)
 cat <<TIPEOF
 
 ════════════════════════════════════════════════════════════════════
- 服务器端装好了。接下来在你的 Windows 上做两步。
+ 服务器端装好了。接下来只需在【你的本地电脑】上操作。
 ════════════════════════════════════════════════════════════════════
 
-【第 1 步】授权本服务器的公钥（管理员 PowerShell，纯追加，不影响已有密钥）
+本服务器的公钥（下一步要用）：
 
-\$key = '$(cat /root/.ssh/id_win.pub)'
-\$g = (Get-LocalGroup -SID 'S-1-5-32-544').Name
-\$admin = [bool](Get-LocalGroupMember -Group \$g -EA SilentlyContinue | Where-Object { \$_.Name -like "*\\\$env:USERNAME" })
-\$f = if (\$admin) { 'C:\ProgramData\ssh\administrators_authorized_keys' } else { "\$env:USERPROFILE\.ssh\authorized_keys" }
-if (-not (Test-Path \$f) -or -not (Select-String -Path \$f -SimpleMatch '$(hostname)' -Quiet)) { Add-Content \$f \$key }
-if (\$admin) { icacls \$f /inheritance:r /grant "\${g}:F" /grant "SYSTEM:F" | Out-Null }
-Restart-Service sshd
-Get-Content \$f
+$(cat /root/.ssh/id_win.pub)
 
 
-【第 2 步】加 SSH 别名（普通 PowerShell 即可，追加到 ~/.ssh/config）
+【Windows】管理员 PowerShell，在 bridge-console 目录里：
 
-\$c = "\$env:USERPROFILE\.ssh\config"
-Add-Content \$c ""
-Add-Content \$c "Host $HOSTN"
-Add-Content \$c "    HostName $SRV_IP"
-Add-Content \$c "    User root"
-Add-Content \$c "    IdentityFile ~/.ssh/你连这台服务器用的私钥"
-Add-Content \$c "    RemoteForward $WIN_PORT 127.0.0.1:22"
-Add-Content \$c "    ServerAliveInterval 30"
-Add-Content \$c "    StrictHostKeyChecking accept-new"
+  powershell -ExecutionPolicy Bypass -File setup-windows.ps1 \\
+    -PubKey "上面那行公钥" \\
+    -ServerHost $SRV -Alias $HOSTN \\
+    -Identity ~/.ssh/你连本服务器用的私钥 \\
+    -LoopbackOnly -AutoStart
 
-  ⚠️ IdentityFile 那行要改成你实际连这台服务器用的私钥路径。
-  ⚠️ 回环地址必须写 127.0.0.1，不能写 localhost（Windows 会解析成 ::1）。
+【macOS】先开「系统设置 → 通用 → 共享 → 远程登录」，然后：
 
+  bash setup-mac.sh --pubkey "上面那行公钥" \\
+    --host $SRV --alias $HOSTN \\
+    --identity ~/.ssh/你连本服务器用的私钥 --autostart
 
-【第 3 步】建隧道（保持窗口开着，或用桌面客户端管理）
+【然后】打开桌面客户端 → 「添加服务器…」→ SSH 别名填 $HOSTN → 「启动隧道」
 
-ssh -N $HOSTN
+  客户端会自动把本机的用户名、系统、工具路径上报给服务器，
+  并领取一个不冲突的隧道端口。服务器这边无需任何手工配置。
 
+【验证】回到服务器执行：
 
-【验证】回到服务器上执行
-
-win-check                              # 隧道 + 免密 + 路径
-win-mount 'D:\你的项目路径'            # 挂载
-win-statusd start                      # 状态守护（桌面客户端用）
-winrun "echo hello"                    # 在 Windows 上执行命令
+  bridge-check            # 列出所有已接入的机器
+  bridge-mounts           # 看挂载
+  bridge-find <关键词>    # 查文件（先在客户端界面挂目录，再 bridge-index）
 
 ════════════════════════════════════════════════════════════════════
 TIPEOF
