@@ -1321,8 +1321,20 @@ class BridgeApp:
         st.configure("Vertical.TScrollbar", background=C_CARD2, troughcolor=C_BG,
                      bordercolor=C_BG, arrowcolor=C_MUTED, relief="flat")
         st.map("Vertical.TScrollbar", background=[("active", C_LINE)])
-        # 弹窗默认底色跟着主题走，否则新窗口会闪出系统灰
+        # 弹窗默认底色跟着主题走，否则新窗口会闪出系统灰。
+        # 下面几条是给 simpledialog 这类用经典 tk 控件的内置对话框兜底 ——
+        # 不加的话暗色主题下会弹出一个白底黑字的框。自己 configure 过的控件不受影响。
         r.option_add("*Toplevel.background", C_CARD)
+        r.option_add("*Label.background", C_CARD)
+        r.option_add("*Label.foreground", C_TEXT)
+        r.option_add("*Frame.background", C_CARD)
+        r.option_add("*Entry.background", C_INPUT)
+        r.option_add("*Entry.foreground", C_TEXT)
+        r.option_add("*Entry.insertBackground", C_TEXT)
+        r.option_add("*Button.background", C_CARD2)
+        r.option_add("*Button.foreground", C_TEXT)
+        r.option_add("*Button.activeBackground", C_SEL)
+        r.option_add("*Button.activeForeground", C_TEXT)
 
         pad = int(fs * 1.5)
         outer = ttk.Frame(r, padding=(pad, pad, pad, int(pad * 0.6)))
