@@ -281,22 +281,26 @@ sudo systemsetup -setremotelogin off   # macOS
 
 ```
 bridge_gui.py                 桌面客户端（三平台通用）
-setup-windows.ps1             Windows 一键配置（顺带生成带图标的 Ferry.lnk）
-setup-mac.sh                  macOS 一键配置（顺带生成 Ferry.app）
-bridge-install.sh             服务器端一键安装
+bridge-install.sh             服务器端一键安装（server/ 打包而成）
+ferry-setup.py                本地一条命令全自动接入（可选路径）
+
+setup-windows.ps1             Windows：装 sshd + 收紧到回环 + 生成 Ferry.lnk
+setup-mac.sh                  macOS：同上 + 生成 Ferry.app
 build-windows-exe.ps1         构建 Ferry.exe
 make-mac-app.sh               生成 Ferry.app
-tools/make-icons.py           重新生成图标
+start-windows.bat             零配置启动（不想构建 exe 时用）
+start-mac.command             零配置启动（不想生成 .app 时用）
+
 assets/ferry.png|.ico|.icns   应用图标
-start-windows.bat             Windows 启动器（不想要 exe 时用）
-start-mac.command             macOS 启动器（不想要 .app 时用）
-bridge-config.example.json    配置参考（正常不用手改）
+tools/make-icons.py           重新生成图标（纯标准库）
+server/                       服务器端工具源码 + regen-installer.sh
 README.md                     本文件
 ```
 
 运行后会自动生成（**这些是本机专属的，拷给别人前要删掉**）：
 
 ```
-bridge-config.json            你的服务器列表与挂载
+bridge-config.json            你的服务器列表与挂载（首次运行由向导生成，不用手写）
 status/<服务器id>/            状态管道 + daemon 日志
+Ferry.exe / Ferry.app / Ferry.lnk   自己构建出来的启动器
 ```

@@ -1,9 +1,12 @@
-# bridge-index 的排除规则（每行一个目录名，匹配任意层级）
-#
-# 注意：git 仓库优先走 `git ls-files`，天然遵守 .gitignore，通常用不到这个文件。
-# 只有非 git 目录才会用到这里的规则。
+# bridge-index 排除规则（每行一个目录名，匹配任意层级）
+# 改这个文件即可，无需改脚本
 .git
 node_modules
+.next
+dist
+build
+out
+target
 __pycache__
 .venv
 venv
@@ -16,9 +19,13 @@ venv
 .turbo
 .gradle
 Pods
-dist
-build
-out
-target
-vendor
 site-packages
+vendor
+.tmp
+.tmp-git-config
+.tmp-xdg
+.xdg-config
+# 项目专属：hongguo-dl 的运行数据（42 万个文件，不是代码）
+data/patched
+data/triage
+data/cover-cache

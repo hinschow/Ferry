@@ -22,14 +22,17 @@ command -v iconv >/dev/null 2>&1 || echo "    ⚠️ 无 iconv，winrun 的中�
 echo "    sshfs $(sshfs --version 2>&1 | grep -o 'SSHFS version.*' || echo ok) / FUSE 可用"
 
 echo "==> 2/5 创建目录与配置"
-mkdir -p /root/.winbridge /root/mnt /root/local-project
-mkdir -p /root/.winbridge/clients /root/.winbridge/status /root/.winbridge/index /root/mnt
-# 不预建客户端档案 —— 客户端首次连接时由 bridge-register 用真实信息自动创建
+# 不预建客户端档案 —— 客户端首次连接时由 bridge-register 用真实信息自动创建。
+# 挂载根按客户端分开：/root/mnt/<机器名>/
+mkdir -p /root/.winbridge/clients /root/.winbridge/status /root/.winbridge/index
+mkdir -p /root/.winbridge/mounts /root/.winbridge/invites /root/mnt
+chmod 700 /root/.winbridge/invites
 cat > /root/.winbridge/config <<'CFGEOF'
-# 全局默认值。每台本地机的信息在 clients/<机器名>.conf，由客户端自动上报生成。
-MOUNT_POINT=/root/local-project
+# 全局可选项。每台本地机的信息在 clients/<机器名>.conf，由客户端自动上报生成，
+# 不要在这里写机器相关的东西。
+# ACTIVE_PROJECT='/root/mnt/<机器名>/<目录>'   # bridge-sync-md 会把它标为「当前主项目」
 CFGEOF
-echo "    /root/.winbridge/config（客户端档案将由 bridge-register 自动创建）"
+echo "    /root/.winbridge/{clients,status,index,mounts,invites} 与 /root/mnt"
 
 echo "==> 3/5 生成专用密钥"
 if [ -f /root/.ssh/id_bridge ]; then
@@ -994,7 +997,7 @@ TOOL_bridge_ls_EOF
 chmod +x /usr/local/bin/bridge-run /usr/local/bin/bridge-mount /usr/local/bin/bridge-umount /usr/local/bin/bridge-mounts /usr/local/bin/bridge-check /usr/local/bin/bridge-grep /usr/local/bin/bridge-git /usr/local/bin/bridge-reset /usr/local/bin/bridge-statusd /usr/local/bin/bridge-daemon /usr/local/bin/bridge-register /usr/local/bin/bridge-add-client /usr/local/bin/bridge-index /usr/local/bin/bridge-find /usr/local/bin/bridge-guard /usr/local/bin/bridge-sync-md /usr/local/bin/bridge-invite /usr/local/bin/bridge-ls 
 for p in win-run:bridge-run win-check:bridge-check win-mounts:bridge-mounts win-grep:bridge-grep win-git:bridge-git win-reset:bridge-reset win-daemon:bridge-daemon win-mount:bridge-mount win-umount:bridge-umount; do
   ln -sfn "/usr/local/bin/${p##*:}" "/usr/local/bin/${p%%:*}"; done
-echo "    bridge-run bridge-mount bridge-umount bridge-mounts bridge-check bridge-grep bridge-git bridge-statusd bridge-daemon（含 win-* 兼容软链）"
+echo "    bridge-* 全套已安装（含 win-* 兼容软链）"
 echo "==> 5/5 完成"
 SRV=$(curl -s -m 5 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
 HOSTN=$(hostname)
