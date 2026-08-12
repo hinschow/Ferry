@@ -250,6 +250,16 @@ class Server:
         return self.conf.get("name") or self.sid
 
     @property
+    def port(self):
+        """隧道端口。注意不能用 conf.get(k, default) —— key 存在但值为 None 时
+        它会返回 None 而不是默认值（新建服务器就是这种情况）。"""
+        try:
+            v = int(self.conf.get("tunnel_port") or 0)
+        except (TypeError, ValueError):
+            v = 0
+        return v or None
+
+    @property
     def status_dir(self):
         return os.path.join(STATUS_ROOT, self.sid)
 
@@ -315,7 +325,14 @@ class Server:
 
     # ---- 隧道
     def tunnel_spawn(self):
-        port = self.conf.get("tunnel_port", 2222)
+        port = self.port
+        if port is None:
+            # 还没在服务器上登记过 —— 先领一个端口再建隧道
+            self.log(f"[{self.label}] 尚未分配隧道端口，先向服务器登记…")
+            port, err = self.register()
+            if err or not port:
+                raise RuntimeError(f"无法取得隧道端口：{err or '服务器未返回'}")
+            self.log(f"  已分配端口 {port}")
         args = ["ssh", "-N",
                 "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3",
                 "-o", "ExitOnForwardFailure=yes", "-o", "BatchMode=yes",
@@ -439,7 +456,7 @@ class Server:
         self.poll_ssh()
 
     def poll_ssh(self):
-        port = self.conf.get("tunnel_port", 2222)
+        port = self.port or 0
         cmd = (f"win-statusd start >/dev/null 2>&1; "
                f"ss -tln 2>/dev/null | grep -q ':{port} ' && echo PORT_OK || echo PORT_NO; "
                f"uptime -p 2>/dev/null; echo ---; "
@@ -519,13 +536,15 @@ class ServerDialog(tk.Toplevel):
                 APP_NAME, "SSH 别名必填 —— 它必须是你 ~/.ssh/config 里已配置的 Host。",
                 parent=self)
             return
-        out = dict(self.conf)
+        out = dict(self.conf)          # 保留已分配的 tunnel_port 等运行期字段
         out.update({
             "id": self.conf.get("id") or vals["ssh_alias"],
             "name": vals["name"] or vals["ssh_alias"],
             "ssh_alias": vals["ssh_alias"],
             "host": vals["host"],
-            "tunnel_port": self.conf.get("tunnel_port"),   # 由服务器分配
+            # tunnel_port 故意不在这里写：新建时若写成 None，
+            # conf.get(k, default) 会返回 None 而不是默认值，拼出 -R None:...
+            # 端口一律由 bridge-register 分配后回填。
             "win_user": local_user(),
             "identity": vals["identity"] or None,
             "auto_tunnel": bool(self.auto.get()),
@@ -809,6 +828,7 @@ class BridgeApp:
                                 srv.tunnel_spawn()
                             except Exception as exc:  # noqa: BLE001
                                 self.log(f"[{srv.label}] 重连失败: {exc}", "error")
+                                srv._retry_at = now + 60      # 配置类错误，别高频重试
                             srv._retry_at = now + delay
                             streaks[srv.sid] = 0
                     else:
