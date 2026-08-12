@@ -1,0 +1,28 @@
+#!/bin/bash
+# bridge-ls [-c 客户端] [服务器目录]
+#
+# 给控制台的「服务器位置」浏览器用：只列一层子目录，绝不递归。
+# 输出：
+#   CWD|<当前绝对路径>
+#   D|<子目录名>|<free|mounted>
+. /root/.winbridge/lib.sh
+bridge_resolve_client "$@" || exit 1
+[ $BRIDGE_SHIFT -gt 0 ] && shift $BRIDGE_SHIFT
+
+DIR="${1:-$MNT_ROOT}"
+[ -d "$DIR" ] || DIR="$MNT_ROOT"
+mkdir -p "$MNT_ROOT" 2>/dev/null
+DIR=$(cd "$DIR" 2>/dev/null && pwd -P) || { echo "ERR|无法进入 $1"; exit 1; }
+
+echo "CWD|$DIR"
+
+# 已经是挂载点的目录标出来，免得用户挂到已占用的位置
+MOUNTED=$(awk '$3 ~ /^fuse/ {gsub(/\\040/," ",$2); print $2}' /proc/mounts)
+
+for d in "$DIR"/*/; do
+  [ -d "$d" ] || continue                 # 没有子目录时 glob 不展开
+  p="${d%/}"; n="${p##*/}"
+  case "$n" in .*) continue ;; esac       # 隐藏目录不列
+  if printf '%s\n' "$MOUNTED" | grep -qxF "$p"; then f=mounted; else f=free; fi
+  echo "D|$n|$f"
+done

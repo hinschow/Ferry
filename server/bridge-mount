@@ -1,17 +1,56 @@
 #!/bin/bash
-# bridge-mount [-c 客户端] <本地路径> [挂载点]
+# bridge-mount [-c 客户端] <本地路径> [服务器挂载点]
+#
+# 挂载点可以自选。不给就落在 /root/mnt/<客户端>/<路径转成的名字>。
 . /root/.winbridge/lib.sh
 bridge_resolve_client "$@" || exit 1
 [ $BRIDGE_SHIFT -gt 0 ] && shift $BRIDGE_SHIFT
 LPATH="$1"
-[ -z "$LPATH" ] && { echo "ERR|用法: bridge-mount [-c 客户端] <本地路径> [挂载点]"; exit 1; }
+[ -z "$LPATH" ] && { echo "ERR|用法: bridge-mount [-c 客户端] <本地路径> [服务器挂载点]"; exit 1; }
 
 SFTP_PATH=$(bridge_sftp_path "$LPATH")
-MP="${2:-$MNT_ROOT/$(bridge_mount_name "$LPATH")}"
+DEFAULT_MP="$MNT_ROOT/$(bridge_mount_name "$LPATH")"
+MP="${2:-$DEFAULT_MP}"
+
+# ---------------------------------------------------------------- 挂载点体检
+case "$MP" in
+  /*) ;;
+  *)  echo "ERR|挂载点必须是绝对路径: $MP"; exit 1 ;;
+esac
+MP="${MP%/}"; [ -z "$MP" ] && MP=/
+
+# 挂上去会把原内容藏起来，这几处藏了等于把机器弄坏。
+# 状态管道自己那个目录是唯一的例外（由 bridge-statusd / 客户端固定使用）。
+if [ "$MP" != "$STATUS_DIR" ]; then
+  case "$MP/" in
+    //|/bin/*|/boot/*|/dev/*|/etc/*|/lib*/*|/proc/*|/run/*|/sbin/*|/sys/*|/usr/*|/var/*)
+      echo "ERR|$MP 是系统目录，不能当挂载点"; exit 1 ;;
+  esac
+  case "$MP" in
+    /|/bin|/boot|/dev|/etc|/home|/lib|/lib64|/proc|/root|/run|/sbin|/srv|/sys|/tmp|/usr|/var)
+      echo "ERR|$MP 是系统目录，不能当挂载点"; exit 1 ;;
+    /root/.ssh*|/root/.winbridge*)
+      echo "ERR|$MP 是桥接自己的目录，不能当挂载点"; exit 1 ;;
+  esac
+fi
 
 mountpoint -q "$MP" && { echo "ALREADY|$MP"; exit 0; }
-mkdir -p "$MP" || { echo "ERR|无法创建挂载点 $MP"; exit 1; }
 
+OWN=keep
+if [ -e "$MP" ]; then
+  [ -d "$MP" ] || { echo "ERR|$MP 已存在且不是目录"; exit 1; }
+  # 非空目录挂上去会把原内容整个盖住，宁可拦下来让用户换一个。
+  # 状态管道例外：守护在没挂载时会往里写状态文件，那是它自己的东西。
+  if [ "$MP" != "$STATUS_DIR" ] && [ -n "$(ls -A "$MP" 2>/dev/null)" ]; then
+    echo "ERR|$MP 已存在且非空，挂上去会盖住原有内容 —— 请换一个空目录或不存在的路径"
+    exit 1
+  fi
+else
+  mkdir -p "$MP" 2>/dev/null || { echo "ERR|无法创建挂载点 $MP"; exit 1; }
+  OWN=own
+fi
+
+# ---------------------------------------------------------------- 挂载
 ERR=$(sshfs -p "$PORT" "$USER@127.0.0.1:$SFTP_PATH" "$MP" \
   -o IdentityFile=/root/.ssh/id_bridge,reconnect,ServerAliveInterval=15,ServerAliveCountMax=3 \
   -o compression=yes,max_conns=4 \
@@ -19,6 +58,11 @@ ERR=$(sshfs -p "$PORT" "$USER@127.0.0.1:$SFTP_PATH" "$MP" \
   -o attr_timeout=15,entry_timeout=15,negative_timeout=5 \
   -o uid=0,gid=0,StrictHostKeyChecking=no,UserKnownHostsFile=/dev/null 2>&1)
 
-if mountpoint -q "$MP"; then echo "OK|$MP"; else
-  rmdir "$MP" 2>/dev/null; echo "ERR|${ERR:-挂载失败，检查路径是否存在}"; exit 1
+if mountpoint -q "$MP"; then
+  bridge_reg_add "$MP" "$LPATH" "$OWN"
+  echo "OK|$MP"
+else
+  [ "$OWN" = own ] && rmdir "$MP" 2>/dev/null
+  echo "ERR|${ERR:-挂载失败，检查路径是否存在}"
+  exit 1
 fi

@@ -101,6 +101,36 @@ bridge_sftp_path() {
 bridge_mount_name() {
   printf '%s' "$1" | tr '\\/: ' '____' | sed 's/__*/_/g; s/^_//; s/_$//'
 }
+
+# ---------------------------------------------------------------- 挂载登记表
+#
+# 挂载点允许放在 MNT_ROOT 之外（用户自选位置），但 bridge-mounts / bridge-statusd
+# 原来只按 MNT_ROOT 前缀匹配 /proc/mounts —— 自选位置会被漏掉，客户端就一直显示
+# 「未挂载」。所以每次挂载都在这里登记一行，两边取并集。
+#   每行： <挂载点>\t<本地路径>\t<own|keep>     own = 目录是我们建的，卸载后删掉
+BRIDGE_REG_DIR=/root/.winbridge/mounts
+
+bridge_reg_file() { printf '%s/%s.tsv' "$BRIDGE_REG_DIR" "${1:-$CLIENT}"; }
+
+bridge_reg_add() {   # <挂载点> <本地路径> <own|keep>
+  local f; f=$(bridge_reg_file)
+  mkdir -p "$BRIDGE_REG_DIR"
+  bridge_reg_del "$1"
+  printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "$f"
+}
+
+bridge_reg_del() {   # <挂载点>  → 回显该行的第三列（own/keep），没登记则空
+  local f; f=$(bridge_reg_file)
+  [ -f "$f" ] || return 0
+  awk -F'\t' -v mp="$1" '$1==mp{print $3}' "$f"
+  local tmp="$f.$$"
+  awk -F'\t' -v mp="$1" '$1!=mp' "$f" > "$tmp" && mv "$tmp" "$f"
+}
+
+bridge_reg_points() {  # 列出登记过的挂载点（每行一个）
+  local f; f=$(bridge_reg_file "${1:-$CLIENT}")
+  [ -f "$f" ] && cut -f1 "$f" || true
+}
 LIB_EOF
 
 cat > /usr/local/bin/bridge-run <<'TOOL_bridge_run_EOF'
@@ -133,19 +163,58 @@ TOOL_bridge_run_EOF
 
 cat > /usr/local/bin/bridge-mount <<'TOOL_bridge_mount_EOF'
 #!/bin/bash
-# bridge-mount [-c 客户端] <本地路径> [挂载点]
+# bridge-mount [-c 客户端] <本地路径> [服务器挂载点]
+#
+# 挂载点可以自选。不给就落在 /root/mnt/<客户端>/<路径转成的名字>。
 . /root/.winbridge/lib.sh
 bridge_resolve_client "$@" || exit 1
 [ $BRIDGE_SHIFT -gt 0 ] && shift $BRIDGE_SHIFT
 LPATH="$1"
-[ -z "$LPATH" ] && { echo "ERR|用法: bridge-mount [-c 客户端] <本地路径> [挂载点]"; exit 1; }
+[ -z "$LPATH" ] && { echo "ERR|用法: bridge-mount [-c 客户端] <本地路径> [服务器挂载点]"; exit 1; }
 
 SFTP_PATH=$(bridge_sftp_path "$LPATH")
-MP="${2:-$MNT_ROOT/$(bridge_mount_name "$LPATH")}"
+DEFAULT_MP="$MNT_ROOT/$(bridge_mount_name "$LPATH")"
+MP="${2:-$DEFAULT_MP}"
+
+# ---------------------------------------------------------------- 挂载点体检
+case "$MP" in
+  /*) ;;
+  *)  echo "ERR|挂载点必须是绝对路径: $MP"; exit 1 ;;
+esac
+MP="${MP%/}"; [ -z "$MP" ] && MP=/
+
+# 挂上去会把原内容藏起来，这几处藏了等于把机器弄坏。
+# 状态管道自己那个目录是唯一的例外（由 bridge-statusd / 客户端固定使用）。
+if [ "$MP" != "$STATUS_DIR" ]; then
+  case "$MP/" in
+    //|/bin/*|/boot/*|/dev/*|/etc/*|/lib*/*|/proc/*|/run/*|/sbin/*|/sys/*|/usr/*|/var/*)
+      echo "ERR|$MP 是系统目录，不能当挂载点"; exit 1 ;;
+  esac
+  case "$MP" in
+    /|/bin|/boot|/dev|/etc|/home|/lib|/lib64|/proc|/root|/run|/sbin|/srv|/sys|/tmp|/usr|/var)
+      echo "ERR|$MP 是系统目录，不能当挂载点"; exit 1 ;;
+    /root/.ssh*|/root/.winbridge*)
+      echo "ERR|$MP 是桥接自己的目录，不能当挂载点"; exit 1 ;;
+  esac
+fi
 
 mountpoint -q "$MP" && { echo "ALREADY|$MP"; exit 0; }
-mkdir -p "$MP" || { echo "ERR|无法创建挂载点 $MP"; exit 1; }
 
+OWN=keep
+if [ -e "$MP" ]; then
+  [ -d "$MP" ] || { echo "ERR|$MP 已存在且不是目录"; exit 1; }
+  # 非空目录挂上去会把原内容整个盖住，宁可拦下来让用户换一个。
+  # 状态管道例外：守护在没挂载时会往里写状态文件，那是它自己的东西。
+  if [ "$MP" != "$STATUS_DIR" ] && [ -n "$(ls -A "$MP" 2>/dev/null)" ]; then
+    echo "ERR|$MP 已存在且非空，挂上去会盖住原有内容 —— 请换一个空目录或不存在的路径"
+    exit 1
+  fi
+else
+  mkdir -p "$MP" 2>/dev/null || { echo "ERR|无法创建挂载点 $MP"; exit 1; }
+  OWN=own
+fi
+
+# ---------------------------------------------------------------- 挂载
 ERR=$(sshfs -p "$PORT" "$USER@127.0.0.1:$SFTP_PATH" "$MP" \
   -o IdentityFile=/root/.ssh/id_bridge,reconnect,ServerAliveInterval=15,ServerAliveCountMax=3 \
   -o compression=yes,max_conns=4 \
@@ -153,21 +222,34 @@ ERR=$(sshfs -p "$PORT" "$USER@127.0.0.1:$SFTP_PATH" "$MP" \
   -o attr_timeout=15,entry_timeout=15,negative_timeout=5 \
   -o uid=0,gid=0,StrictHostKeyChecking=no,UserKnownHostsFile=/dev/null 2>&1)
 
-if mountpoint -q "$MP"; then echo "OK|$MP"; else
-  rmdir "$MP" 2>/dev/null; echo "ERR|${ERR:-挂载失败，检查路径是否存在}"; exit 1
+if mountpoint -q "$MP"; then
+  bridge_reg_add "$MP" "$LPATH" "$OWN"
+  echo "OK|$MP"
+else
+  [ "$OWN" = own ] && rmdir "$MP" 2>/dev/null
+  echo "ERR|${ERR:-挂载失败，检查路径是否存在}"
+  exit 1
 fi
 TOOL_bridge_mount_EOF
 
 cat > /usr/local/bin/bridge-umount <<'TOOL_bridge_umount_EOF'
 #!/bin/bash
+# bridge-umount [-c 客户端] <挂载点>
 . /root/.winbridge/lib.sh
 bridge_resolve_client "$@" || exit 1
 [ $BRIDGE_SHIFT -gt 0 ] && shift $BRIDGE_SHIFT
-MP="$1"
+MP="${1%/}"
 [ -z "$MP" ] && { echo "ERR|用法: bridge-umount [-c 客户端] <挂载点>"; exit 1; }
+
 fusermount3 -u "$MP" 2>/dev/null || fusermount -u "$MP" 2>/dev/null
 mountpoint -q "$MP" && { echo "ERR|卸载失败，可能有进程正在使用"; exit 1; }
-case "$MP" in /root/mnt/*) rmdir "$MP" 2>/dev/null ;; esac
+
+# 只删我们自己建的空目录；用户原本就有的目录留着
+OWN=$(bridge_reg_del "$MP")
+case "$MP" in
+  /root/mnt/*) rmdir "$MP" 2>/dev/null ;;
+  *) [ "$OWN" = own ] && rmdir "$MP" 2>/dev/null ;;
+esac
 echo "OK|$MP"
 TOOL_bridge_umount_EOF
 
@@ -177,8 +259,16 @@ cat > /usr/local/bin/bridge-mounts <<'TOOL_bridge_mounts_EOF'
 . /root/.winbridge/lib.sh
 if [ "$1" = "-c" ]; then
   bridge_resolve_client "$@" || exit 1
-  awk -v p="$MNT_ROOT" -v s="/root/.winbridge/status/$CLIENT" \
-    '$3=="fuse.sshfs" && (index($2,p)==1 || $2==s) {gsub(/\\040/," ",$2); print $2"\t"$1}' /proc/mounts
+  # 属于本客户端的挂载 = 落在 MNT_ROOT 下的 + 状态管道 + 登记表里自选位置的。
+  # 登记表走 -v 传进去而不是当第一个文件读 —— 表为空时 NR==FNR 会对
+  # /proc/mounts 的每一行都成立，结果一条都不输出。
+  awk -v p="$MNT_ROOT/" -v s="/root/.winbridge/status/$CLIENT" \
+      -v reglist="$(bridge_reg_points)" '
+    BEGIN { n=split(reglist, a, "\n"); for (i=1;i<=n;i++) if (a[i]!="") reg[a[i]]=1 }
+    $3!="fuse.sshfs" { next }
+    { mp=$2; gsub(/\\040/," ",mp) }
+    index(mp,p)==1 || mp==s || (mp in reg) { print mp"\t"$1 }
+  ' /proc/mounts
 else
   awk '$3=="fuse.sshfs" {gsub(/\\040/," ",$2); print $2"\t"$1}' /proc/mounts
 fi
@@ -267,8 +357,13 @@ one() {
             while IFS=$'\t' read -r mp src; do
               [ -z "$mp" ] && continue
               MJSON="${MJSON:+$MJSON,}{\"mount\":\"$mp\",\"src\":\"$src\"}"
-            done < <(awk -v p="$MNT_ROOT" -v s="$SDIR" \
-                 '$3=="fuse.sshfs" && (index($2,p)==1 || $2==s){gsub(/\\040/," ",$2); print $2"\t"$1}' /proc/mounts)
+            done < <(awk -v p="$MNT_ROOT/" -v s="$SDIR" \
+                   -v reglist="$(cut -f1 "$REGF" 2>/dev/null)" '
+                   BEGIN { n=split(reglist,a,"\n"); for(i=1;i<=n;i++) if(a[i]!="") reg[a[i]]=1 }
+                   $3!="fuse.sshfs" { next }
+                   { mp=$2; gsub(/\\040/," ",mp) }
+                   index(mp,p)==1 || mp==s || (mp in reg) { print mp"\t"$1 }
+                 ' /proc/mounts)
             JSON="{\"ts\":$TS,\"client\":\"$CLIENT\",\"os\":\"$OS\",\"port_ok\":$PORT_OK,\"uptime\":\"$UP\",\"mounts\":[$MJSON]}"
             if [ -d "$SDIR" ]; then
               ( printf '%s' "$JSON" > "$SDIR/$NAME_F" ) & local p=$!
@@ -279,6 +374,7 @@ one() {
           done
         }
         setsid bash -c "PORT=$PORT CLIENT=$CLIENT OS=$OS MNT_ROOT=$MNT_ROOT SDIR=$SDIR
+                        REGF=/root/.winbridge/mounts/$CLIENT.tsv
                         $(declare -f loop); loop" >/dev/null 2>&1 < /dev/null &
         echo $! > "$PIDF"; echo "  $CLIENT: 已启动 (pid $!)" ;;
       stop)
@@ -864,7 +960,38 @@ $TOKEN
 TIPEOF
 TOOL_bridge_invite_EOF
 
-chmod +x /usr/local/bin/bridge-run /usr/local/bin/bridge-mount /usr/local/bin/bridge-umount /usr/local/bin/bridge-mounts /usr/local/bin/bridge-check /usr/local/bin/bridge-grep /usr/local/bin/bridge-git /usr/local/bin/bridge-reset /usr/local/bin/bridge-statusd /usr/local/bin/bridge-daemon /usr/local/bin/bridge-register /usr/local/bin/bridge-add-client /usr/local/bin/bridge-index /usr/local/bin/bridge-find /usr/local/bin/bridge-guard /usr/local/bin/bridge-sync-md /usr/local/bin/bridge-invite 
+cat > /usr/local/bin/bridge-ls <<'TOOL_bridge_ls_EOF'
+#!/bin/bash
+# bridge-ls [-c 客户端] [服务器目录]
+#
+# 给控制台的「服务器位置」浏览器用：只列一层子目录，绝不递归。
+# 输出：
+#   CWD|<当前绝对路径>
+#   D|<子目录名>|<free|mounted>
+. /root/.winbridge/lib.sh
+bridge_resolve_client "$@" || exit 1
+[ $BRIDGE_SHIFT -gt 0 ] && shift $BRIDGE_SHIFT
+
+DIR="${1:-$MNT_ROOT}"
+[ -d "$DIR" ] || DIR="$MNT_ROOT"
+mkdir -p "$MNT_ROOT" 2>/dev/null
+DIR=$(cd "$DIR" 2>/dev/null && pwd -P) || { echo "ERR|无法进入 $1"; exit 1; }
+
+echo "CWD|$DIR"
+
+# 已经是挂载点的目录标出来，免得用户挂到已占用的位置
+MOUNTED=$(awk '$3 ~ /^fuse/ {gsub(/\\040/," ",$2); print $2}' /proc/mounts)
+
+for d in "$DIR"/*/; do
+  [ -d "$d" ] || continue                 # 没有子目录时 glob 不展开
+  p="${d%/}"; n="${p##*/}"
+  case "$n" in .*) continue ;; esac       # 隐藏目录不列
+  if printf '%s\n' "$MOUNTED" | grep -qxF "$p"; then f=mounted; else f=free; fi
+  echo "D|$n|$f"
+done
+TOOL_bridge_ls_EOF
+
+chmod +x /usr/local/bin/bridge-run /usr/local/bin/bridge-mount /usr/local/bin/bridge-umount /usr/local/bin/bridge-mounts /usr/local/bin/bridge-check /usr/local/bin/bridge-grep /usr/local/bin/bridge-git /usr/local/bin/bridge-reset /usr/local/bin/bridge-statusd /usr/local/bin/bridge-daemon /usr/local/bin/bridge-register /usr/local/bin/bridge-add-client /usr/local/bin/bridge-index /usr/local/bin/bridge-find /usr/local/bin/bridge-guard /usr/local/bin/bridge-sync-md /usr/local/bin/bridge-invite /usr/local/bin/bridge-ls 
 for p in win-run:bridge-run win-check:bridge-check win-mounts:bridge-mounts win-grep:bridge-grep win-git:bridge-git win-reset:bridge-reset win-daemon:bridge-daemon win-mount:bridge-mount win-umount:bridge-umount; do
   ln -sfn "/usr/local/bin/${p##*:}" "/usr/local/bin/${p%%:*}"; done
 echo "    bridge-run bridge-mount bridge-umount bridge-mounts bridge-check bridge-grep bridge-git bridge-statusd bridge-daemon（含 win-* 兼容软链）"

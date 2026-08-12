@@ -104,8 +104,26 @@ bash setup-mac.sh --pubkey "公钥" --host <IP> --alias <别名> --autostart
 
 | 系统 | 启动方式 |
 |---|---|
-| Windows | 双击 `start-windows.bat` |
-| macOS | 双击 `start-mac.command`（或 `python3 bridge_gui.py`） |
+| **Windows** | 双击 **`Ferry.exe`**（`setup-windows.ps1` 也会生成带图标的 `Ferry.lnk`，可右键固定到任务栏） |
+| **macOS** | 双击 **`Ferry.app`**（`setup-mac.sh` 自动生成，可拖进「程序」或 Dock） |
+| 兜底 | `start-windows.bat` / `start-mac.command` / `python3 bridge_gui.py` |
+
+`Ferry.exe` 不在仓库里（11 MB 的二进制不适合进 git），自己构建一次即可：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File build-windows-exe.ps1
+```
+
+它自带 Python 和 Tk，装不装 Python 的机器都能跑。**它仍然执行同目录的
+`bridge_gui.py`** —— 所以控制台的「重载」自更新照常有效（把整个代码冻进去就没法自更新了）。
+
+macOS 那边同理，`Ferry.app` 是个免编译的 bundle，跑一次就有：
+
+```bash
+bash make-mac-app.sh
+```
+
+图标要重新生成的话：`python3 tools/make-icons.py`（纯标准库，不依赖 Pillow）。
 
 首次运行会引导你**添加服务器**，只需填一项：
 
@@ -129,7 +147,7 @@ SSH 别名        myserver      ← 唯一必填（就是上一步的 -Alias）
 | 区域 | 用途 |
 |---|---|
 | **服务器** | 多台服务器并列，各自独立的隧道/状态/挂载。「保活」开启后断线自动重连（指数退避 3→60 秒） |
-| **挂载目录** | 「添加文件夹…」选任意目录挂到服务器；双击一行切换挂载/卸载 |
+| **挂载目录** | 「添加文件夹…」→ 本机目录和**服务器位置都能自己选**；「更改位置…」改已有条目；双击一行切换挂载/卸载 |
 | **运行日志** | 实时事件 |
 | **重载** | 程序有更新时变橙色，点一下就地重启 |
 | **紧急断开** | 停全部隧道 + 关闭本机 sshd，服务器立即失去所有访问权 |
@@ -142,8 +160,9 @@ SSH 别名        myserver      ← 唯一必填（就是上一步的 -Alias）
 |---|---|
 | `bridge-check [-c 机器]` | 检查隧道/免密/挂载/状态管道，不带 `-c` 检查全部 |
 | `bridge-mounts [-c 机器]` | 列出挂载 |
-| `bridge-mount -c 机器 '<本地路径>'` | 挂载（Windows 用 `D:\path`，Mac 用 `/Users/...`） |
+| `bridge-mount -c 机器 '<本地路径>' [服务器挂载点]` | 挂载（Windows 用 `D:\path`，Mac 用 `/Users/...`）；第二个参数可指定挂到服务器的哪里，不给就用 `/root/mnt/<机器>/<自动命名>` |
 | `bridge-umount -c 机器 <挂载点>` | 卸载 |
+| `bridge-ls -c 机器 [目录]` | 列服务器上某个目录的下一层（控制台的「服务器位置」浏览器用它，只列一层，不递归） |
 | `bridge-run -c 机器 [-d 目录] "命令"` | **在本机原生执行** |
 | `bridge-grep -c 机器 -d 目录 <关键词>` | 用本机 ripgrep 全文搜索 |
 | `bridge-git -c 机器 -d 目录 <git参数>` | git 在本机跑 |
@@ -209,6 +228,11 @@ sudo systemsetup -setremotelogin off   # macOS
 |---|---|
 | 客户端一直「等待状态…」 | 状态目录没挂上。点「重连」，或服务器上 `bridge-check -c <机器>` |
 | 挂载目录报 I/O error | 隧道断了。点「启动隧道」；恢复后 sshfs 会自动重连 |
+| 挂载时报「已存在且非空」 | 换个空目录或还不存在的路径。挂在非空目录上会把原内容整个盖住，所以直接拦掉 |
+| 挂载时报「是系统目录」 | `/etc` `/usr` `/var` 这些不能当挂载点。放 `/root/mnt/...` 或自己新建的目录 |
+| Windows 上 `Ferry.exe` 被杀毒软件拦 | PyInstaller 打的包常被误报。加白名单，或直接用 `Ferry.lnk` / `start-windows.bat` |
+| Mac 上 `Ferry.app` 提示「已损坏」 | 隔离标记：`xattr -dr com.apple.quarantine Ferry.app` |
+| `Ferry.app` 双击没反应 | 它靠相对位置找 `bridge_gui.py`。别单独把 .app 拖走，要搬就整个文件夹一起搬 |
 | `remote port forwarding failed` | 端口被占。多半是同一台机器开了两条隧道，先关掉旧的 |
 | 服务器命令卡住不返回 | SSH 复用连接坏了，`bridge-reset` |
 | sshd 启动失败 | `ListenAddress` 必须写在 `Match` 块**之前**；改完先 `sshd -t` 校验 |
@@ -228,11 +252,15 @@ sudo systemsetup -setremotelogin off   # macOS
 
 ```
 bridge_gui.py                 桌面客户端（三平台通用）
-setup-windows.ps1             Windows 一键配置
-setup-mac.sh                  macOS 一键配置
+setup-windows.ps1             Windows 一键配置（顺带生成带图标的 Ferry.lnk）
+setup-mac.sh                  macOS 一键配置（顺带生成 Ferry.app）
 bridge-install.sh             服务器端一键安装
-start-windows.bat             Windows 启动器
-start-mac.command             macOS 启动器
+build-windows-exe.ps1         构建 Ferry.exe
+make-mac-app.sh               生成 Ferry.app
+tools/make-icons.py           重新生成图标
+assets/ferry.png|.ico|.icns   应用图标
+start-windows.bat             Windows 启动器（不想要 exe 时用）
+start-mac.command             macOS 启动器（不想要 .app 时用）
 bridge-config.example.json    配置参考（正常不用手改）
 README.md                     本文件
 ```

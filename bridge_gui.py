@@ -14,6 +14,7 @@
 import json
 import os
 import queue
+import re
 import shutil
 import subprocess
 import sys
@@ -21,7 +22,7 @@ import tempfile
 import threading
 import time
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog, messagebox, simpledialog
 
 APP_NAME = "桥接控制台"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -129,6 +130,53 @@ def sshd_stop():
                 "（或 sudo systemsetup -setremotelogin off）")
     rc, out = run(["systemctl", "stop", "ssh"], timeout=25)
     return (rc == 0, "sshd 已关闭" if rc == 0 else "需要 root 权限，请手动 systemctl stop ssh")
+
+
+# ---------------------------------------------------------------- 挂载条目
+#
+# 配置里的挂载条目有两种形态，都要认：
+#   老版本  "D:\\code-test"                                  只有本机路径
+#   新版本  {"local": "D:\\code-test", "server": "/data/x"}  server 为空表示用默认位置
+
+def mount_local(entry):
+    if isinstance(entry, dict):
+        return str(entry.get("local") or "")
+    return str(entry or "")
+
+
+def mount_target(entry):
+    if isinstance(entry, dict):
+        return str(entry.get("server") or "")
+    return ""
+
+
+def mount_entry(local, server=""):
+    return {"local": local, "server": server} if server else local
+
+
+def default_mount_dir(path):
+    """默认挂载点目录名 —— 必须和服务器端 bridge_mount_name 算出同一个结果"""
+    name = re.sub(r"_+", "_", re.sub(r"[\\/: ]", "_", str(path))).strip("_")
+    return name or "mount"
+
+
+_ICON_REF = []          # PhotoImage 必须留引用，否则会被回收，图标变空白
+
+
+def set_window_icon(win):
+    """给窗口贴上应用图标。找不到图标文件就安静跳过。"""
+    try:
+        ico = os.path.join(BASE_DIR, "assets", "ferry.ico")
+        if IS_WIN and os.path.exists(ico):
+            win.iconbitmap(default=ico)         # default= 让所有子窗口一起继承
+            return
+        png = os.path.join(BASE_DIR, "assets", "ferry.png")
+        if os.path.exists(png):
+            img = tk.PhotoImage(file=png)       # Tk 8.6 起原生认 PNG
+            _ICON_REF.append(img)
+            win.iconphoto(True, img)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def from_sftp_path(src):
@@ -736,6 +784,244 @@ class InviteDialog(tk.Toplevel):
 
 # ================================================================ 服务器编辑对话框
 
+class RemoteBrowser(tk.Toplevel):
+    """服务器端目录选择器。
+
+    只调 bridge-ls（单层列目录），永远不递归 —— 在挂载目录上做全树遍历
+    会把隧道堵死，所有使用者一起卡。
+    """
+
+    def __init__(self, parent, srv, start):
+        super().__init__(parent)
+        self.result = None
+        self.srv = srv
+        self.cwd = start or "/"
+        self.q = queue.Queue()
+        self.title(f"选择 {srv.label} 上的位置")
+        self.transient(parent)
+        self.minsize(460, 340)
+
+        frm = ttk.Frame(self, padding=12)
+        frm.pack(fill="both", expand=True)
+        frm.columnconfigure(0, weight=1)
+        frm.rowconfigure(1, weight=1)
+
+        top = ttk.Frame(frm)
+        top.grid(row=0, column=0, sticky="we")
+        self.path_var = tk.StringVar(value=self.cwd)
+        ttk.Entry(top, textvariable=self.path_var).pack(side="left", fill="x", expand=True)
+        ttk.Button(top, text="转到", width=6,
+                   command=lambda: self._load(self.path_var.get().strip())).pack(side="left", padx=(6, 0))
+        ttk.Button(top, text="上一层", width=8, command=self._up).pack(side="left", padx=(6, 0))
+
+        self.lst = tk.Listbox(frm, activestyle="none", highlightthickness=0)
+        self.lst.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
+        self.lst.bind("<Double-1>", lambda _e: self._enter())
+
+        self.hint = ttk.Label(frm, text="", style="Sub.TLabel")
+        self.hint.grid(row=2, column=0, sticky="w", pady=(6, 0))
+
+        bar = ttk.Frame(frm)
+        bar.grid(row=3, column=0, sticky="e", pady=(10, 0))
+        ttk.Button(bar, text="取消", command=self.destroy).pack(side="right", padx=(6, 0))
+        ttk.Button(bar, text="选定当前目录", command=self._pick).pack(side="right")
+        ttk.Button(bar, text="新建子目录…", command=self._mkdir).pack(side="right", padx=(0, 6))
+
+        self._load(self.cwd)
+        self.grab_set()
+        self.wait_window(self)
+
+    # -- 后台取目录，主线程轮询，避免 SSH 往返把窗口卡住
+    def _load(self, path):
+        self.lst.delete(0, "end")
+        self.lst.insert("end", "  读取中…")
+        self.hint.configure(text="")
+
+        def work():
+            rc, out = self.srv.on_server(
+                f"bridge-ls -c {machine_id()} {shlex_quote(path)}", 30)
+            self.q.put((rc, out))
+        threading.Thread(target=work, daemon=True).start()
+        self.after(120, self._drain)
+
+    def _drain(self):
+        try:
+            rc, out = self.q.get_nowait()
+        except queue.Empty:
+            self.after(120, self._drain)
+            return
+        self.rows = []
+        cwd = None
+        for line in out.splitlines():
+            if line.startswith("CWD|"):
+                cwd = line[4:].strip()
+            elif line.startswith("D|"):
+                parts = line.split("|")
+                self.rows.append((parts[1], parts[2] if len(parts) > 2 else "free"))
+        if cwd is None:
+            self.lst.delete(0, "end")
+            self.hint.configure(text=(out.strip().split("|")[-1] or "读取失败")[:90])
+            return
+        self.cwd = cwd
+        self.path_var.set(cwd)
+        self.lst.delete(0, "end")
+        for name, flag in self.rows:
+            self.lst.insert("end", f"  {name}" + ("      〔已挂载〕" if flag == "mounted" else ""))
+        if not self.rows:
+            self.hint.configure(text="（空目录 —— 可以直接「选定当前目录」）")
+        else:
+            self.hint.configure(text="双击进入下一层；「已挂载」的目录不能重复占用")
+
+    def _join(self, name):
+        return (self.cwd.rstrip("/") + "/" + name) or "/"
+
+    def _enter(self):
+        sel = self.lst.curselection()
+        if sel and getattr(self, "rows", None) and sel[0] < len(self.rows):
+            self._load(self._join(self.rows[sel[0]][0]))
+
+    def _up(self):
+        parent = os.path.dirname(self.cwd.rstrip("/")) or "/"
+        self._load(parent)
+
+    def _mkdir(self):
+        name = simpledialog.askstring("新建子目录", "目录名：", parent=self)
+        if not name:
+            return
+        name = name.strip().strip("/")
+        if not name:
+            return
+        # 只是选个位置，真正的目录由 bridge-mount 挂载时创建
+        self.result = self._join(name)
+        self.destroy()
+
+    def _pick(self):
+        sel = self.lst.curselection()
+        if sel and getattr(self, "rows", None) and sel[0] < len(self.rows):
+            name, flag = self.rows[sel[0]]
+            if flag == "mounted":
+                messagebox.showwarning(APP_NAME, f"{name} 已经挂着别的目录了，换一个。", parent=self)
+                return
+            self.result = self._join(name)
+        else:
+            self.result = self.cwd
+        self.destroy()
+
+
+class MountDialog(tk.Toplevel):
+    """挂载一个文件夹：本机目录 + 服务器上放在哪，两边都可以自己选。"""
+
+    def __init__(self, parent, srv, local="", server="", title="挂载文件夹"):
+        super().__init__(parent)
+        self.result = None
+        self.srv = srv
+        self.title(title)
+        self.transient(parent)
+        self.resizable(False, False)
+
+        frm = ttk.Frame(self, padding=14)
+        frm.pack(fill="both", expand=True)
+        frm.columnconfigure(1, weight=1)
+
+        self.v_local = tk.StringVar(value=local)
+        self.v_server = tk.StringVar(value=server)
+        # 用户手动改过服务器位置后，就别再跟着本机目录自动变了
+        self.server_touched = bool(server)
+
+        ttk.Label(frm, text="本机目录").grid(row=0, column=0, sticky="w")
+        e1 = ttk.Entry(frm, textvariable=self.v_local, width=46)
+        e1.grid(row=0, column=1, sticky="we", padx=(10, 6))
+        ttk.Button(frm, text="浏览…", width=8, command=self._pick_local).grid(row=0, column=2)
+        ttk.Label(frm, text="要挂到服务器上的本机文件夹",
+                  style="Sub.TLabel").grid(row=1, column=1, sticky="w", padx=(10, 0))
+
+        ttk.Label(frm, text="服务器位置").grid(row=2, column=0, sticky="w", pady=(12, 0))
+        e2 = ttk.Entry(frm, textvariable=self.v_server, width=46)
+        e2.grid(row=2, column=1, sticky="we", padx=(10, 6), pady=(12, 0))
+        ttk.Button(frm, text="浏览…", width=8,
+                   command=self._pick_server).grid(row=2, column=2, pady=(12, 0))
+        self.lbl_hint = ttk.Label(frm, text="", style="Sub.TLabel")
+        self.lbl_hint.grid(row=3, column=1, sticky="w", padx=(10, 0))
+
+        self.v_local.trace_add("write", lambda *_a: self._sync_default())
+        self.v_server.trace_add("write", lambda *_a: self._refresh_hint())
+        e2.bind("<Key>", lambda _e: setattr(self, "server_touched", True))
+
+        bar = ttk.Frame(frm)
+        bar.grid(row=9, column=0, columnspan=3, sticky="e", pady=(18, 0))
+        ttk.Button(bar, text="取消", command=self.destroy).pack(side="right", padx=(6, 0))
+        ttk.Button(bar, text="恢复默认位置", command=self._reset).pack(side="right", padx=(6, 0))
+        ttk.Button(bar, text="挂载", command=self._ok).pack(side="right")
+
+        self._refresh_hint()
+        (e1 if not local else e2).focus_set()
+        self.grab_set()
+        self.wait_window(self)
+
+    # ---- 默认位置：/root/mnt/<本机名>/<路径转成的名字>
+    def _default_target(self):
+        local = self.v_local.get().strip()
+        if not local:
+            return ""
+        return f"/root/mnt/{machine_id()}/{default_mount_dir(local)}"
+
+    def _sync_default(self):
+        if not self.server_touched:
+            self.v_server.set(self._default_target())
+        self._refresh_hint()
+
+    def _reset(self):
+        self.server_touched = False
+        self.v_server.set(self._default_target())
+
+    def _refresh_hint(self):
+        target = self.v_server.get().strip()
+        if not target:
+            self.lbl_hint.configure(text="留空则用默认位置")
+        elif target == self._default_target():
+            self.lbl_hint.configure(text="默认位置（每台机器一个独立的挂载根，不会互相撞名）")
+        else:
+            self.lbl_hint.configure(text="自定义位置 —— 必须是绝对路径，且是空目录或还不存在")
+
+    def _pick_local(self):
+        path = filedialog.askdirectory(title="选择本机文件夹", mustexist=True, parent=self)
+        if path:
+            self.v_local.set(os.path.normpath(path))
+
+    def _pick_server(self):
+        if not self.srv.port_ok:
+            messagebox.showinfo(APP_NAME, "隧道没连上，浏览不了服务器目录。\n可以直接手填绝对路径。",
+                                parent=self)
+            return
+        cur = self.v_server.get().strip()
+        start = os.path.dirname(cur.rstrip("/")) if cur.startswith("/") else f"/root/mnt/{machine_id()}"
+        dlg = RemoteBrowser(self, self.srv, start or "/")
+        if dlg.result:
+            self.server_touched = True
+            self.v_server.set(dlg.result)
+
+    def _ok(self):
+        local = self.v_local.get().strip()
+        target = self.v_server.get().strip()
+        if not local:
+            messagebox.showwarning(APP_NAME, "先选一个本机目录。", parent=self)
+            return
+        local = os.path.normpath(local)
+        if not os.path.isdir(local):
+            messagebox.showwarning(APP_NAME, f"本机目录不存在：\n{local}", parent=self)
+            return
+        if Server.is_internal(local):
+            messagebox.showinfo(APP_NAME, "这是控制台的内部状态目录，不需要手动挂载。", parent=self)
+            return
+        if target and not target.startswith("/"):
+            messagebox.showwarning(APP_NAME, "服务器位置必须是绝对路径，以 / 开头。", parent=self)
+            return
+        if target == self._default_target():
+            target = ""            # 跟默认一样就别记死，换机器名时还能自动跟着走
+        self.result = (local, target)
+        self.destroy()
+
+
 class ServerDialog(tk.Toplevel):
     FIELDS = [
         ("ssh_alias",   "SSH 别名",       "~/.ssh/config 里的 Host 名，如 myserver（唯一必填项）"),
@@ -1051,6 +1337,7 @@ class BridgeApp:
         ttk.Label(mh, text="挂载目录", style="Big.TLabel").pack(side="left")
         self.btns = {}
         for key, text, cmd in (("del", "移除", self.act_del_mount),
+                               ("edit", "更改位置…", self.act_edit_mount),
                                ("tog", "挂载/卸载", self.act_toggle),
                                ("add", "添加文件夹…", self.act_add_mount)):
             b = ttk.Button(mh, text=text, command=cmd)
@@ -1321,13 +1608,18 @@ class BridgeApp:
         try:
             for srv in self.servers:
                 srv.want_up = False       # 保留隧道进程，不在退出时杀
-            exe = sys.executable
-            if exe.lower().endswith("python.exe"):
-                cand = exe[:-len("python.exe")] + "pythonw.exe"
-                if os.path.exists(cand):
-                    exe = cand
-            args = [exe, os.path.abspath(__file__)] + [
-                a for a in sys.argv[1:] if a != "--auto-tunnel"]
+            rest = [a for a in sys.argv[1:] if a != "--auto-tunnel"]
+            if getattr(sys, "frozen", False):
+                # 打包成 Ferry.exe 之后，sys.executable 就是启动器本身，
+                # 不能再往后面接脚本路径
+                args = [sys.executable] + rest
+            else:
+                exe = sys.executable
+                if exe.lower().endswith("python.exe"):
+                    cand = exe[:-len("python.exe")] + "pythonw.exe"
+                    if os.path.exists(cand):
+                        exe = cand
+                args = [exe, os.path.abspath(__file__)] + rest
             subprocess.Popen(args, cwd=BASE_DIR, creationflags=NO_WINDOW,
                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL)
@@ -1510,60 +1802,95 @@ class BridgeApp:
         sel = self.tree.selection()
         return self.tree.item(sel[0], "values")[0] if sel else None
 
+    def _entry_index(self, srv, local):
+        """在配置里找这个本机路径对应的条目下标，没有返回 -1"""
+        for i, e in enumerate(srv.conf.get("mounts", [])):
+            if mount_local(e) == local:
+                return i
+        return -1
+
+    def _save_entry(self, srv, local, target):
+        entries = srv.conf.setdefault("mounts", [])
+        i = self._entry_index(srv, local)
+        if i >= 0:
+            entries[i] = mount_entry(local, target)
+        else:
+            entries.append(mount_entry(local, target))
+        self._persist()
+
     def act_add_mount(self):
         srv = self.current()
         if not srv:
             messagebox.showinfo(APP_NAME, "请先选中一台服务器。")
             return
-        path = filedialog.askdirectory(title=f"选择要挂载到 {srv.label} 的文件夹",
-                                       mustexist=True)
-        if not path:
+        dlg = MountDialog(self.root, srv)
+        if not dlg.result:
             return
-        path = os.path.normpath(path)
-        if Server.is_internal(path):
-            messagebox.showinfo(APP_NAME, "这是控制台的内部状态目录，不需要手动挂载。")
+        local, target = dlg.result
+        self._save_entry(srv, local, target)
+        self.log(f"[{srv.label}] 已添加 {local}")
+        self._do_mount(srv, local, target)
+
+    def act_edit_mount(self):
+        """改挂载位置。已挂着的要先卸载，否则改了也不生效，白改一场。"""
+        srv, local = self.current(), self._sel_mount()
+        if not srv or not local:
             return
-        if path not in srv.conf.setdefault("mounts", []):
-            srv.conf["mounts"].append(path)
-            self._persist()
-            self.log(f"[{srv.label}] 已添加 {path}")
-        self._do_mount(srv, path)
+        if local in srv.mounts:
+            messagebox.showinfo(APP_NAME, "该目录正挂载中。改位置需要先卸载，再重新挂。")
+            return
+        i = self._entry_index(srv, local)
+        cur = srv.conf["mounts"][i] if i >= 0 else local
+        dlg = MountDialog(self.root, srv, mount_local(cur), mount_target(cur), title="更改挂载位置")
+        if not dlg.result:
+            return
+        new_local, target = dlg.result
+        if i >= 0 and new_local != local:
+            srv.conf["mounts"].pop(i)
+        self._save_entry(srv, new_local, target)
+        self.log(f"[{srv.label}] 已更新 {new_local} → {target or '默认位置'}")
+        self._refresh_mounts()
 
     def act_del_mount(self):
-        srv, path = self.current(), self._sel_mount()
-        if not srv or not path:
+        srv, local = self.current(), self._sel_mount()
+        if not srv or not local:
             return
-        if path in srv.mounts:
+        if local in srv.mounts:
             messagebox.showwarning(APP_NAME, "该目录正在挂载中，请先卸载。")
             return
-        if path in srv.conf.get("mounts", []):
-            srv.conf["mounts"].remove(path)
+        i = self._entry_index(srv, local)
+        if i >= 0:
+            srv.conf["mounts"].pop(i)
             self._persist()
-            self.log(f"[{srv.label}] 已从列表移除 {path}")
+            self.log(f"[{srv.label}] 已从列表移除 {local}")
             self._refresh_mounts()
 
     def act_toggle(self):
-        srv, path = self.current(), self._sel_mount()
-        if not srv or not path:
+        srv, local = self.current(), self._sel_mount()
+        if not srv or not local:
             return
-        if path in srv.mounts:
-            self._do_umount(srv, path, srv.mounts[path])
+        if local in srv.mounts:
+            self._do_umount(srv, local, srv.mounts[local])
         else:
-            self._do_mount(srv, path)
+            i = self._entry_index(srv, local)
+            target = mount_target(srv.conf["mounts"][i]) if i >= 0 else ""
+            self._do_mount(srv, local, target)
 
     def act_refresh(self):
         srv = self.current()
         if srv:
             self._work(srv.poll)
 
-    def _do_mount(self, srv, path):
+    def _do_mount(self, srv, path, target=""):
         def job():
             if not srv.port_ok:
                 self.log(f"[{srv.label}] 隧道未连接，无法挂载", "error")
                 return
             self.log(f"[{srv.label}] 挂载 {path} …")
-            rc, out = srv.on_server(
-                f"bridge-mount -c {machine_id()} {shlex_quote(path)}", 60)
+            cmd = f"bridge-mount -c {machine_id()} {shlex_quote(path)}"
+            if target:
+                cmd += f" {shlex_quote(target)}"
+            rc, out = srv.on_server(cmd, 60)
             line = out.strip().splitlines()[-1] if out.strip() else ""
             if line.startswith(("OK|", "ALREADY|")):
                 self.log(f"  → {line.split('|', 1)[1]}")
@@ -1639,12 +1966,17 @@ class BridgeApp:
         self.tree.delete(*self.tree.get_children())
         if not srv:
             return
-        rows = [p for p in dict.fromkeys(list(srv.conf.get("mounts", []))
-                                         + list(srv.mounts.keys()))
-                if not Server.is_internal(p)]
+        planned = {}
+        for e in srv.conf.get("mounts", []):
+            planned.setdefault(mount_local(e), mount_target(e))
+        rows = [p for p in dict.fromkeys(list(planned) + list(srv.mounts.keys()))
+                if p and not Server.is_internal(p)]
         for path in rows:
             mp = srv.mounts.get(path)
-            self.tree.insert("", "end", values=(path, mp or "—", "已挂载" if mp else "未挂载"),
+            # 没挂上时显示「打算挂到哪」，比一个 — 有用得多
+            where = mp or planned.get(path) or f"/root/mnt/{machine_id()}/{default_mount_dir(path)}"
+            self.tree.insert("", "end",
+                             values=(path, where, "已挂载" if mp else "未挂载"),
                              tags=("on" if mp else "off",))
         if keep:
             for iid in self.tree.get_children():
@@ -1766,8 +2098,11 @@ def main():
     try:
         from ctypes import windll
         windll.shcore.SetProcessDpiAwareness(1)
+        # 任务栏要认出这是独立应用（而不是「Python」），得给它自己的 AppUserModelID
+        windll.shell32.SetCurrentProcessExplicitAppUserModelID("online.ferry.console")
     except Exception:  # noqa: BLE001
         pass
+    set_window_icon(root)
     BridgeApp(root, auto_tunnel=auto, start_minimized=mini)
     root.mainloop()
 

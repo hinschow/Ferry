@@ -15,3 +15,11 @@ __pycache__/
 # 系统
 .DS_Store
 Thumbs.db
+
+# 打包产物（各自在本机构建，二进制不入库）
+Ferry.exe
+Ferry.lnk
+Ferry.app/
+_build/
+_dist/
+_ferry_launcher.py

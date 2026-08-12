@@ -23,8 +23,13 @@ one() {
             while IFS=$'\t' read -r mp src; do
               [ -z "$mp" ] && continue
               MJSON="${MJSON:+$MJSON,}{\"mount\":\"$mp\",\"src\":\"$src\"}"
-            done < <(awk -v p="$MNT_ROOT" -v s="$SDIR" \
-                 '$3=="fuse.sshfs" && (index($2,p)==1 || $2==s){gsub(/\\040/," ",$2); print $2"\t"$1}' /proc/mounts)
+            done < <(awk -v p="$MNT_ROOT/" -v s="$SDIR" \
+                   -v reglist="$(cut -f1 "$REGF" 2>/dev/null)" '
+                   BEGIN { n=split(reglist,a,"\n"); for(i=1;i<=n;i++) if(a[i]!="") reg[a[i]]=1 }
+                   $3!="fuse.sshfs" { next }
+                   { mp=$2; gsub(/\\040/," ",mp) }
+                   index(mp,p)==1 || mp==s || (mp in reg) { print mp"\t"$1 }
+                 ' /proc/mounts)
             JSON="{\"ts\":$TS,\"client\":\"$CLIENT\",\"os\":\"$OS\",\"port_ok\":$PORT_OK,\"uptime\":\"$UP\",\"mounts\":[$MJSON]}"
             if [ -d "$SDIR" ]; then
               ( printf '%s' "$JSON" > "$SDIR/$NAME_F" ) & local p=$!
@@ -35,6 +40,7 @@ one() {
           done
         }
         setsid bash -c "PORT=$PORT CLIENT=$CLIENT OS=$OS MNT_ROOT=$MNT_ROOT SDIR=$SDIR
+                        REGF=/root/.winbridge/mounts/$CLIENT.tsv
                         $(declare -f loop); loop" >/dev/null 2>&1 < /dev/null &
         echo $! > "$PIDF"; echo "  $CLIENT: 已启动 (pid $!)" ;;
       stop)

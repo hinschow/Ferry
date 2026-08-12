@@ -32,7 +32,7 @@ case "$IDENTITY" in
     exit 1 ;;
 esac
 
-echo "[1/7] Remote Login (sshd)"
+echo "[1/8] Remote Login (sshd)"
 if systemsetup -getremotelogin 2>/dev/null | grep -qi "On"; then
   echo "      already on"
 else
@@ -41,7 +41,7 @@ else
   echo "      or run:    sudo systemsetup -setremotelogin on"
 fi
 
-echo "[2/7] Authorizing server public key"
+echo "[2/8] Authorizing server public key"
 if [ -n "$PUBKEY" ]; then
   mkdir -p ~/.ssh && chmod 700 ~/.ssh
   touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
@@ -57,7 +57,7 @@ else
   echo "      no --pubkey given, skipped"
 fi
 
-echo "[3/7] SSH host alias"
+echo "[3/8] SSH host alias"
 if [ -n "$SRVHOST" ]; then
   [ -z "$ALIAS" ] && ALIAS=$(printf '%s' "$SRVHOST" | tr -cd '[:alnum:]')
   CFG=~/.ssh/config
@@ -84,7 +84,7 @@ else
   echo "      no --host given, skipped"
 fi
 
-echo "[4/7] Python / Tk check"
+echo "[4/8] Python / Tk check"
 # Apple's system Tk 8.5.9 is deprecated and crashes on modern macOS (esp. Apple Silicon).
 # We need an interpreter whose tkinter links against Tk 8.6+.
 PY=""
@@ -103,7 +103,7 @@ if [ -z "$PY" ]; then
   echo "        Then: /opt/homebrew/bin/python3 bridge_gui.py"
 fi
 
-echo "[5/7] Launcher permissions & quarantine"
+echo "[5/8] Launcher permissions & quarantine"
 for f in start-mac.command setup-mac.sh; do
   if [ -f "$HERE/$f" ]; then
     chmod +x "$HERE/$f" 2>/dev/null && echo "      chmod +x $f"
@@ -114,7 +114,7 @@ if xattr -dr com.apple.quarantine "$HERE" 2>/dev/null; then
   echo "      cleared com.apple.quarantine"
 fi
 
-echo "[6/7] Full Disk Access check"
+echo "[6/8] Full Disk Access check"
 # macOS TCC blocks sshd sessions from reading ~/Desktop, ~/Documents, ~/Downloads
 # unless sshd-keygen-wrapper is granted Full Disk Access.
 PROBE=~/Documents
@@ -132,7 +132,7 @@ else
   echo "      skipped"
 fi
 
-echo "[7/7] Auto-start LaunchAgent"
+echo "[7/8] Auto-start LaunchAgent"
 if [ "$AUTOSTART" = "1" ]; then
   PLIST=~/Library/LaunchAgents/com.bridge.console.plist
   mkdir -p ~/Library/LaunchAgents
@@ -160,6 +160,14 @@ PLISTEOF
   echo "      created $PLIST"
 else
   echo "      skipped (pass --autostart to enable)"
+fi
+
+# ---- build the Ferry.app bundle so the console launches like a real app
+if [ -f "$HERE/make-mac-app.sh" ]; then
+  echo "[8/8] building Ferry.app"
+  bash "$HERE/make-mac-app.sh" "$HERE" >/dev/null 2>&1 \
+    && echo "      $HERE/Ferry.app  (double-click, or drag to the Dock)" \
+    || echo "      skipped (make-mac-app.sh failed)"
 fi
 
 echo ""

@@ -44,7 +44,7 @@ if (-not (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole(
     exit 1
 }
 
-Say "[1/6] Installing OpenSSH Server"
+Say "[1/7] Installing OpenSSH Server"
 $cap = Get-WindowsCapability -Online -Name OpenSSH.Server* | Select-Object -First 1
 if ($cap.State -ne "Installed") {
     Add-WindowsCapability -Online -Name $cap.Name | Out-Null
@@ -54,7 +54,7 @@ Set-Service -Name sshd -StartupType Automatic
 if ((Get-Service sshd).Status -ne "Running") { Start-Service sshd }
 Say ("      service: " + (Get-Service sshd).Status)
 
-Say "[2/6] Authorizing server public key"
+Say "[2/7] Authorizing server public key"
 if ($PubKey -and $PubKey.Trim()) {
     $grp = (Get-LocalGroup -SID 'S-1-5-32-544').Name
     $isAdmin = [bool](Get-LocalGroupMember -Group $grp -EA SilentlyContinue |
@@ -77,7 +77,7 @@ if ($PubKey -and $PubKey.Trim()) {
     }
 } else { Warn "no -PubKey given, skipping" }
 
-Say "[3/6] Hardening sshd (loopback only)"
+Say "[3/7] Hardening sshd (loopback only)"
 if ($LoopbackOnly) {
     $c = "C:\ProgramData\ssh\sshd_config"
     Copy-Item $c "$c.bak" -Force
@@ -102,7 +102,7 @@ if ($LoopbackOnly) {
     }
 } else { Say "      skipped (pass -LoopbackOnly to enable)" }
 
-Say "[4/6] Adding SSH host alias"
+Say "[4/7] Adding SSH host alias"
 if ($ServerHost) {
     if (-not $Alias) { $Alias = ($ServerHost -replace '[^A-Za-z0-9]', '') }
     $cfg = "$env:USERPROFILE\.ssh\config"
@@ -126,34 +126,52 @@ if ($ServerHost) {
     }
 } else { Say "      skipped (pass -ServerHost to add)" }
 
-Say "[5/6] Startup shortcut"
+Say "[5/7] Desktop shortcut"
+# A shortcut with the real icon is the no-build way to get a proper-looking app.
+# Want an actual Ferry.exe instead? Run build-windows-exe.ps1.
+$gui = Join-Path $PSScriptRoot "bridge_gui.py"
+$pyw = (Get-Command pythonw -EA SilentlyContinue).Source
+$ico = Join-Path $PSScriptRoot "assets\ferry.ico"
+if (-not (Test-Path $gui)) { Warn "bridge_gui.py not found next to this script" }
+elseif (-not $pyw) { Warn "pythonw not found on PATH" }
+else {
+    $sh = New-Object -ComObject WScript.Shell
+    $lnk = Join-Path $PSScriptRoot "Ferry.lnk"
+    $s = $sh.CreateShortcut($lnk)
+    $s.TargetPath = $pyw
+    $s.Arguments = "`"$gui`""
+    $s.WorkingDirectory = $PSScriptRoot
+    $s.Description = "Ferry bridge console"
+    if (Test-Path $ico) { $s.IconLocation = $ico }
+    $s.Save()
+    Say ("      created " + $lnk + "   (right-click -> pin to taskbar)")
+}
+
+Say "[6/7] Startup shortcut"
 if ($AutoStart) {
-    $gui = Join-Path $PSScriptRoot "bridge_gui.py"
     if (-not (Test-Path $gui)) { Warn "bridge_gui.py not found next to this script" }
+    elseif (-not $pyw) { Warn "pythonw not found on PATH" }
     else {
-        $pyw = (Get-Command pythonw -EA SilentlyContinue).Source
-        if (-not $pyw) { Warn "pythonw not found on PATH" }
-        else {
-            $lnk = Join-Path ([Environment]::GetFolderPath("Startup")) "BridgeConsole.lnk"
-            $sh = New-Object -ComObject WScript.Shell
-            $s = $sh.CreateShortcut($lnk)
-            $s.TargetPath = $pyw
-            $s.Arguments = "`"$gui`" --auto-tunnel --minimized"
-            $s.WorkingDirectory = $PSScriptRoot
-            $s.WindowStyle = 7
-            $s.Save()
-            Say ("      created " + $lnk)
-        }
+        $lnk = Join-Path ([Environment]::GetFolderPath("Startup")) "BridgeConsole.lnk"
+        $sh = New-Object -ComObject WScript.Shell
+        $s = $sh.CreateShortcut($lnk)
+        $s.TargetPath = $pyw
+        $s.Arguments = "`"$gui`" --auto-tunnel --minimized"
+        $s.WorkingDirectory = $PSScriptRoot
+        if (Test-Path $ico) { $s.IconLocation = $ico }
+        $s.WindowStyle = 7
+        $s.Save()
+        Say ("      created " + $lnk)
     }
 } else { Say "      skipped (pass -AutoStart to enable)" }
 
-Say "[6/6] Summary"
+Say "[7/7] Summary"
 Say ("      sshd        : " + (Get-Service sshd).Status)
 Get-NetTCPConnection -LocalPort 22 -State Listen -EA SilentlyContinue |
     ForEach-Object { Say ("      listening   : " + $_.LocalAddress + ":" + $_.LocalPort) }
 if ($Alias) {
     Say ("      test with   : ssh -N " + $Alias)
-    Say  "      then on the server: win-check  /  win-mount 'D:\your\path'"
+    Say  "      then on the server: bridge-check  /  bridge-mount 'D:\your\path'"
 }
 Say ""
 Say "Done."
