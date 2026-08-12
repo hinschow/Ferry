@@ -216,7 +216,8 @@ sudo systemsetup -setremotelogin off   # macOS
 | 服务器命令卡住不返回 | SSH 复用连接坏了，`bridge-reset` |
 | sshd 启动失败 | `ListenAddress` 必须写在 `Match` 块**之前**；改完先 `sshd -t` 校验 |
 | 隧道通但连不上 sshd | 回环地址要写 `127.0.0.1`，**不能写 `localhost`**（Windows 会解析成 ::1） |
-| Mac 上界面起不来 | 缺 tkinter：`brew install python-tk` |
+| **Mac 上启动即「Python 意外退出」** | **系统/Xcode 自带的 python3 链接的是 Apple 废弃的 Tk 8.5.9，在现代 macOS（尤其 Apple Silicon）上必崩。**执行 `brew install python-tk`，然后用 `/opt/homebrew/bin/python3 bridge_gui.py` 启动。验证：`python3 -c "import tkinter;print(tkinter.TkVersion)"` 应 ≥ 8.6 |
+| Mac 上界面起不来（无崩溃） | 缺 tkinter：`brew install python-tk` |
 | Mac 双击 `.command` 没反应 | 权限丢了：`chmod +x start-mac.command` |
 | Mac 提示「无法打开，来自身份不明的开发者」 | 隔离标记：`xattr -dr com.apple.quarantine .` |
 | Mac 挂载 `~/Documents` / `~/Desktop` / `~/Downloads` 报 `Operation not permitted` | macOS 隐私保护（TCC）拦了 sshd。给 `/usr/libexec/sshd-keygen-wrapper` 授予**完全磁盘访问权限**：系统设置 → 隐私与安全性 → 完全磁盘访问权限 → `+` → `Cmd+Shift+G` 输入该路径 |

@@ -1140,9 +1140,43 @@ class BridgeApp:
         self.root.destroy()
 
 
+def check_tk():
+    """Apple 自带的 Tcl/Tk 8.5.9 在现代 macOS（尤其 Apple Silicon）上会直接 abort。
+    与其崩溃给用户看一个没有信息量的「Python 意外退出」，不如提前说清楚。"""
+    try:
+        ver = float(tk.TkVersion)
+    except Exception:  # noqa: BLE001
+        return
+    if ver >= 8.6:
+        return
+    msg = [
+        "",
+        "=" * 68,
+        f"  检测到 Tcl/Tk {tk.TkVersion} —— 这个版本在 macOS 上会导致程序崩溃。",
+        "",
+        f"  当前解释器: {sys.executable}",
+        "",
+        "  Apple 系统自带的 Tk 8.5.9 已废弃且有已知崩溃缺陷，",
+        "  Xcode / 系统自带的 python3 都链接到它。",
+        "",
+        "  解决办法：装一个带正常 Tk 的 Python，然后用它启动",
+        "",
+        "      brew install python-tk",
+        "      /opt/homebrew/bin/python3 bridge_gui.py",
+        "",
+        "  验证： /opt/homebrew/bin/python3 -c \"import tkinter; print(tkinter.TkVersion)\"",
+        "  应显示 8.6 或更高。",
+        "=" * 68,
+        "",
+    ]
+    print("\n".join(msg), file=sys.stderr)
+    sys.exit(2)
+
+
 def main():
     auto = "--auto-tunnel" in sys.argv
     mini = "--minimized" in sys.argv
+    check_tk()
     os.makedirs(STATUS_ROOT, exist_ok=True)
     root = tk.Tk()
     try:

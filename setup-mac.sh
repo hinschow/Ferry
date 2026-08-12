@@ -84,17 +84,23 @@ else
   echo "      no --host given, skipped"
 fi
 
-echo "[4/7] Python / tkinter check"
-PY=$(command -v python3 || true)
+echo "[4/7] Python / Tk check"
+# Apple's system Tk 8.5.9 is deprecated and crashes on modern macOS (esp. Apple Silicon).
+# We need an interpreter whose tkinter links against Tk 8.6+.
+PY=""
+for cand in /opt/homebrew/bin/python3 /usr/local/bin/python3 python3; do
+  command -v "$cand" >/dev/null 2>&1 || continue
+  tkv=$("$cand" -c "import tkinter;print(tkinter.TkVersion)" 2>/dev/null) || continue
+  case "$tkv" in
+    8.6*|8.7*|9.*) PY="$cand"; echo "      OK: $cand  (Tk $tkv)"; break ;;
+    *) echo "      skip: $cand  (Tk $tkv - known to crash)" ;;
+  esac
+done
 if [ -z "$PY" ]; then
-  echo "      python3 not found - install it (brew install python-tk works best)"
-else
-  if "$PY" -c "import tkinter" 2>/dev/null; then
-    echo "      $($PY -V) with tkinter - OK"
-  else
-    echo "      $($PY -V) but tkinter MISSING"
-    echo "      fix: brew install python-tk"
-  fi
+  echo "      ! No usable Python found (need tkinter with Tk 8.6+)."
+  echo "        Apple/Xcode python3 links against the broken system Tk 8.5.9."
+  echo "        Fix:  brew install python-tk"
+  echo "        Then: /opt/homebrew/bin/python3 bridge_gui.py"
 fi
 
 echo "[5/7] Launcher permissions & quarantine"
@@ -138,7 +144,7 @@ if [ "$AUTOSTART" = "1" ]; then
   <key>Label</key><string>com.bridge.console</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${PY:-/usr/bin/python3}</string>
+    <string>${PY:-/opt/homebrew/bin/python3}</string>
     <string>$HERE/bridge_gui.py</string>
     <string>--auto-tunnel</string>
     <string>--minimized</string>
