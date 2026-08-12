@@ -37,7 +37,22 @@
 
 ## 二、接入一台服务器（推荐做法）
 
-**服务器上执行一条命令：**
+### 第 1 步：在服务器上装工具（每台服务器只做一次）
+
+```bash
+git clone https://github.com/hinschow/Ferry.git ~/Ferry
+cd ~/Ferry && bash bridge-install.sh
+```
+
+装好的是 `bridge-*` 那一套命令（**下一步要用的 `bridge-invite` 就在里面**）、
+一把本服务器专用的 SSH 密钥，以及 `/root/mnt`、`/root/.winbridge` 两个目录。
+
+需要 **root**、**sshfs**、**`/dev/fuse`**。sshfs 没装脚本会自己装；
+容器里若没有 `/dev/fuse` 会直接报错退出 —— FUSE 挂载是这套东西的前提。
+
+> 这台服务器装过了就跳过。判断办法：`bridge-check` 能跑出东西就是装好了。
+
+### 第 2 步：在服务器上发一张接入码
 
 ```bash
 bridge-invite --name 我的Mac
@@ -45,31 +60,28 @@ bridge-invite --name 我的Mac
 
 它会打印一段接入码（`FERRY1:...`）。
 
-**客户端里粘贴：**
-
-打开控制台 → 「添加服务器…」→ 选「是（粘贴接入码）」→ 粘贴整段 → 完成。
-
-客户端会自动做完这些：授权服务器公钥到本机 · 保存登录密钥 ·
-写好 SSH 别名 · 加入服务器列表 · 建立隧道。**Windows 和 macOS 流程完全一样。**
-
-**每台机器一张,互不影响。** 接入码为每台机器单独生成一把密钥并追加到
-`authorized_keys`,不会覆盖已有的:
+**每台机器一张，互不影响。** 接入码为每台机器单独生成一把密钥并追加到
+`authorized_keys`，不会覆盖已有的：
 
 ```bash
 bridge-invite --name mac-mini        # 给 Mac
 bridge-invite --name win-desktop     # 给 Windows，两者独立并存
 bridge-invite --list                 # 看已发放的和是否有效
+bridge-invite --show mac-mini        # 接入码弄丢了？重新显示
 bridge-invite --revoke mac-mini      # 只吊销这一台，其它照常
 ```
 
-```bash
-bridge-invite --show mac-mini        # 接入码弄丢了？重新显示
-```
-
-> 重名会被直接拦住并给出三条去路(换名/重新显示/先吊销再发),
+> 重名会被直接拦住并给出三条去路（换名/重新显示/先吊销再发），
 > 不会出现两台机器共用一把钥匙的情况。
 >
-> ⚠️ 接入码包含服务器的登录凭据,只发给你信任的机器。
+> ⚠️ 接入码包含服务器的登录凭据，只发给你信任的机器。
+
+### 第 3 步：在本地电脑的控制台里粘贴
+
+打开控制台 → 左栏「**＋ 添加**」→ 选「是（粘贴接入码）」→ 粘贴整段 → 完成。
+
+客户端会自动做完这些：授权服务器公钥到本机 · 保存登录密钥 ·
+写好 SSH 别名 · 加入服务器列表 · 建立隧道。**Windows 和 macOS 流程完全一样。**
 
 前提：本机 SSH 服务要开着（服务器靠它回连）
 - **Windows** 管理员 PowerShell：`Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0; Start-Service sshd; Set-Service sshd -StartupType Automatic`
@@ -79,24 +91,33 @@ bridge-invite --show mac-mini        # 接入码弄丢了？重新显示
 
 ## 三、其它部署方式
 
-**命令行一键**（本地终端跑，效果同上）
+**命令行一键**（在**本地电脑**的终端里跑，上面三步全包）
 
 ```bash
 python3 ferry-setup.py root@服务器IP
 ```
 
-**完全手工**（想了解每一步时用）
+它一口气做完：装服务器端工具 → 把服务器公钥授权到本机 → 写好 `~/.ssh/config`
+别名 → 写好客户端配置 → 打开控制台。**不需要接入码**。
+
+前提是你本来就能 `ssh root@服务器IP` 上去（它靠这条现成的通道去装）。
+接入码那条路是给「服务器你能登、但不想在本地终端折腾」的场景用的。
+
+**完全手工**（不用接入码，想自己控制每一步时）
 
 ```bash
-# 服务器
-git clone <本仓库地址> ~/Ferry && cd ~/Ferry && bash bridge-install.sh
+# ① 服务器：装工具，并记下它打印的公钥
+git clone https://github.com/hinschow/Ferry.git ~/Ferry
+cd ~/Ferry && bash bridge-install.sh
 
-# Windows，管理员 PowerShell，一整行
-powershell -ExecutionPolicy Bypass -File setup-windows.ps1 -PubKey "公钥" -ServerHost <IP> -Alias <别名> -LoopbackOnly -AutoStart
+# ② Windows，管理员 PowerShell，一整行
+powershell -ExecutionPolicy Bypass -File setup-windows.ps1 -PubKey "上一步的公钥" -ServerHost <IP> -Alias <别名> -LoopbackOnly -AutoStart
 
-# macOS
-bash setup-mac.sh --pubkey "公钥" --host <IP> --alias <别名> --autostart
+# ③ macOS
+bash setup-mac.sh --pubkey "上一步的公钥" --host <IP> --alias <别名> --autostart
 ```
+
+然后打开控制台 →「＋ 添加」→ 选「否（手工填写）」→ SSH 别名填上面的 `<别名>`。
 
 ---
 
@@ -201,12 +222,14 @@ SSH 别名        myserver      ← 唯一必填（就是上一步的 -Alias）
 
 ## 七、加第二台电脑
 
-**服务器端什么都不用做。** 客户端会自动登记并领取一个不冲突的端口。
+**服务器端不用再装一遍** —— 工具装过就是装过了，只要再发一张接入码。
 
-1. 把这个目录（干净的分发包）拷到新电脑
-2. 跑 `setup-windows.ps1` 或 `setup-mac.sh`（换一个 `-Alias`）
-3. 打开客户端 → 添加服务器 → 填 SSH 别名 → 启动隧道
+1. 服务器上：`bridge-invite --name 新机器名`（名字别和已有的重复）
+2. 新电脑上：`git clone https://github.com/hinschow/Ferry.git` 后打开控制台
+3. 控制台 →「＋ 添加」→ 粘贴接入码 → 完成
 4. 服务器上 `bridge-check` 会同时显示两台
+
+隧道端口由服务器自动分配，不会撞车。
 
 每台机器有独立的挂载根 `/root/mnt/<机器名>/`、独立状态目录、独立隧道端口，互不影响。
 

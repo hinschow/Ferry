@@ -14,6 +14,8 @@ bash regen-installer.sh          # 会读取 /usr/local/bin/bridge-* 重新打�
 | `bridge-run` | 在客户端机器上原生执行命令 |
 | `bridge-mount` / `bridge-umount` / `bridge-mounts` | 挂载管理 |
 | `bridge-check` | 连通性检查 |
+| `bridge-ls` | 只列一层的目录浏览，给控制台的「服务器位置」选择器用 |
+| `bridge-invite` | 发/查/重显/吊销接入码（`--name` / `--list` / `--show` / `--revoke`） |
 | `bridge-grep` / `bridge-git` | 搜索与 git（跑在客户端本机） |
 | `bridge-daemon` | 长驻进程（Windows→schtasks，Mac/Linux→nohup） |
 | `bridge-statusd` | 状态守护，每客户端一个 |

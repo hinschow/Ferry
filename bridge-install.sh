@@ -1002,7 +1002,7 @@ HOSTN=$(hostname)
 cat <<TIPEOF
 
 ════════════════════════════════════════════════════════════════════
- 服务器端装好了。接下来只需在【你的本地电脑】上操作。
+ 服务器端装好了。接下来：这台服务器上发接入码 → 本地电脑粘贴。
 ════════════════════════════════════════════════════════════════════
 
 本服务器的公钥（下一步要用）：
@@ -1010,36 +1010,51 @@ cat <<TIPEOF
 $(cat /root/.ssh/id_bridge.pub)
 
 
-【第 1 步】在【你的本地电脑】上取得客户端文件（不是在这台服务器上）：
+【第 1 步】就在这台服务器上，给每台要接入的电脑各发一张接入码：
 
-  git clone <本项目仓库地址> ~/bridge-console
-  cd ~/bridge-console
+  bridge-invite --name 我的Mac
 
-  # 或者把 setup-windows.ps1 / setup-mac.sh / bridge_gui.py 三个文件拷过去也行
+  会打印一段 FERRY1: 开头的接入码。每台电脑发一张，名字别重复
+  （重名会被拦下并告诉你怎么改）。
+  ⚠️ 接入码里含本服务器的登录凭据，只发给你信任的机器。
 
-【第 2 步】配置本机（下面命令都是一整行）
+【第 2 步】在【你的本地电脑】上取得客户端（不是在这台服务器上）：
 
-  Windows —— 管理员 PowerShell：
+  git clone https://github.com/hinschow/Ferry.git ~/Ferry && cd ~/Ferry
 
-  powershell -ExecutionPolicy Bypass -File setup-windows.ps1 -PubKey "上面那行公钥" -ServerHost $SRV -Alias $HOSTN -Identity ~/.ssh/你连本服务器用的私钥 -LoopbackOnly -AutoStart
+  Windows：powershell -ExecutionPolicy Bypass -File build-windows-exe.ps1
+           构建出 Ferry.exe，双击运行（不想构建就双击 start-windows.bat）
+  macOS  ：bash make-mac-app.sh 生成 Ferry.app，双击运行
+           （需要 Tk 8.6+：brew install python-tk）
 
-  macOS —— 先开「系统设置 → 通用 → 共享 → 远程登录」，然后终端执行：
+  本机的 SSH 服务要开着，服务器靠它回连：
+  Windows 管理员 PowerShell：
+    Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0; Start-Service sshd
+  macOS：系统设置 → 通用 → 共享 → 远程登录
 
-  bash setup-mac.sh --pubkey "上面那行公钥" --host $SRV --alias $HOSTN --identity ~/.ssh/你连本服务器用的私钥 --autostart
+【第 3 步】客户端 →「＋ 添加」→ 选「是（粘贴接入码）」→ 粘贴整段 → 完成
 
-  注意 --identity / -Identity 要填【私钥】路径（不带 .pub）；
-  若你本来就能直接 ssh 上这台服务器，这个参数可以整个省略。
+  授权服务器公钥、保存登录密钥、写 SSH 别名、建立隧道，客户端全自动做完。
+  隧道端口也由服务器自动分配，这边不用配任何机器信息。
 
-【第 3 步】打开桌面客户端 → 「添加服务器…」→ SSH 别名填 $HOSTN → 「启动隧道」
-
-  客户端会自动把本机的用户名、系统、工具路径上报给服务器，
-  并领取一个不冲突的隧道端口。服务器这边无需任何手工配置。
-
-【验证】回到服务器执行：
+【验证】回到这台服务器执行：
 
   bridge-check            # 列出所有已接入的机器
   bridge-mounts           # 看挂载
-  bridge-find <关键词>    # 查文件（先在客户端界面挂目录，再 bridge-index）
+  bridge-invite --list    # 看发过哪些接入码、是否还有效
+
+【接入码的其它用法】
+
+  bridge-invite --list           已发放的
+  bridge-invite --show <名字>    弄丢了重新显示
+  bridge-invite --revoke <名字>  吊销某一台，其它不受影响
+
+【不想用接入码？】本服务器公钥就是上面那行，可以手工配：
+
+  Windows：powershell -ExecutionPolicy Bypass -File setup-windows.ps1 -PubKey "上面那行公钥" -ServerHost $SRV -Alias $HOSTN -LoopbackOnly -AutoStart
+  macOS  ：bash setup-mac.sh --pubkey "上面那行公钥" --host $SRV --alias $HOSTN --autostart
+
+  若还要指定连本服务器用的私钥，加 -Identity / --identity（填【私钥】路径，不带 .pub）。
 
 ════════════════════════════════════════════════════════════════════
 TIPEOF
