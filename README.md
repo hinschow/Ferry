@@ -35,70 +35,49 @@
 
 ---
 
-## 二、服务器端部署（每台服务器只做一次）
+## 二、一键接入（推荐）
 
-前置：Ubuntu/Debian、root 权限、支持 FUSE（`/dev/fuse` 存在）。
-
-**方式一：直接 clone（推荐）**
+在**你的电脑**上,一条命令搞定两端:
 
 ```bash
-git clone <本仓库地址> ~/Ferry
-cd ~/Ferry
-bash bridge-install.sh          # 不需要任何参数
+python3 ferry-setup.py root@服务器IP
 ```
 
-**方式二：只传一个文件**
+它会依次完成:检查本机 Python/Tk → 检查本机 sshd → 连服务器装工具 →
+**自动取回服务器公钥并授权到本机**(不用你复制粘贴)→ 写好 SSH 别名 →
+生成客户端配置 → 启动界面。
 
-```bash
-scp bridge-install.sh root@服务器IP:/root/
-ssh root@服务器IP 'bash /root/bridge-install.sh'
-```
+需要你手工介入的只有一处,脚本会明确停下来提示:
 
-> `bridge-install.sh` 是自包含的，16 个工具都打包在里面，单独一个文件就能装。
-> clone 整个仓库的好处是以后 `git pull` 就能更新。
+- **Windows**:安装/启动 sshd 需要管理员权限(给出可直接粘贴的命令)
+- **macOS**:打开「系统设置 → 通用 → 共享 → 远程登录」
 
-安装脚本会：装 `sshfs` → 建目录 → **生成该服务器专属密钥** → 装好全部命令行工具 →
-**打印出你在本地电脑上要执行的命令**（含公钥、服务器 IP，可直接复制）。
-
-把打印出来的**公钥**记下来，下一步要用。
-
-> **服务器上不需要预先登记任何机器信息。** 客户端首次连接时会自动上报本机的
-> 用户名、系统类型、工具路径，并向服务器领取一个不冲突的隧道端口。
+> macOS 注意:必须用带 Tk 8.6+ 的 Python。系统/Xcode 自带的 Tk 8.5.9 会崩溃。
+> `brew install python-tk` 后用 `/opt/homebrew/bin/python3 ferry-setup.py ...`
 
 ---
 
-## 三、本地电脑接入
+## 三、手工部署（想了解细节时用）
 
-### Windows
+**服务器端**
+
+```bash
+git clone <本仓库地址> ~/Ferry && cd ~/Ferry
+bash bridge-install.sh          # 不需要任何参数
+```
+
+装完会打印服务器公钥和本地要执行的命令。
+
+**本地电脑**
 
 ```powershell
-# 管理员 PowerShell，在 bridge-console 目录里执行
-powershell -ExecutionPolicy Bypass -File setup-windows.ps1 `
-  -PubKey "服务器打印的那行 ssh-ed25519 ..." `
-  -ServerHost 服务器IP -Alias myserver `
-  -Identity ~/.ssh/你连服务器用的私钥 `
-  -LoopbackOnly -AutoStart
+# Windows，管理员 PowerShell，一整行
+powershell -ExecutionPolicy Bypass -File setup-windows.ps1 -PubKey "公钥" -ServerHost <IP> -Alias <别名> -LoopbackOnly -AutoStart
 ```
 
-一条命令完成：装 OpenSSH Server → 授权公钥 → 收窄 sshd 只监听回环 → 加 SSH 别名 → 建开机自启。
-
-### macOS
-
 ```bash
-# 先打开：系统设置 → 通用 → 共享 → 远程登录
-bash setup-mac.sh \
-  --pubkey "服务器打印的那行 ssh-ed25519 ..." \
-  --host 服务器IP --alias myserver \
-  --identity ~/.ssh/你连服务器用的私钥 \
-  --autostart
-```
-
-> macOS 需要 tkinter：`brew install python-tk`
-
-### 验证
-
-```bash
-ssh -N myserver     # 不报错、光标停住 = 隧道通了
+# macOS，先开「远程登录」
+bash setup-mac.sh --pubkey "公钥" --host <IP> --alias <别名> --autostart
 ```
 
 ---
