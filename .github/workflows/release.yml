@@ -1,0 +1,90 @@
+# 打 tag 就自动构建 Ferry.exe / Ferry.app 并发布到 Releases。
+#
+# 二进制不进 git：PyInstaller 产物 11 MB 且几乎不可 delta 压缩，每次重新
+# 构建都是一个全新 blob，会永久留在历史里。Releases 才是放它们的地方。
+#
+#   手动跑一次（产物存 artifact，不建 Release）：
+#     仓库 Actions 页 → Build and release → Run workflow
+#   正式发布：
+#     git tag v1.0.0 && git push origin v1.0.0
+name: Build and release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write          # 建 Release 需要
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # 直接用本地那份构建脚本，避免 CI 和手工构建两套逻辑各跑各的
+      - name: 构建 Ferry.exe
+        shell: pwsh
+        run: ./build-windows-exe.ps1
+
+      # Ferry.exe 只是启动器，仍然执行同目录的 bridge_gui.py，
+      # 所以压缩包必须把它依赖的东西一起带上，解压即可用。
+      - name: 组装发布包
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force Ferry | Out-Null
+          Copy-Item Ferry.exe, bridge_gui.py, setup-windows.ps1, start-windows.bat, README.md Ferry
+          Copy-Item -Recurse assets Ferry
+          Compress-Archive -Path Ferry -DestinationPath Ferry-windows-x64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: Ferry-windows-x64.zip
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 生成 Ferry.app
+        run: bash make-mac-app.sh
+
+      - name: 组装发布包
+        run: |
+          mkdir -p Ferry
+          cp -R Ferry.app Ferry/
+          cp bridge_gui.py setup-mac.sh make-mac-app.sh start-mac.command README.md Ferry/
+          cp -R assets Ferry/
+          # 用 ditto 而不是 zip：.app 里的可执行位要保住，否则解压出来点不开
+          ditto -c -k --sequesterRsrc --keepParent Ferry Ferry-macos.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: Ferry-macos.zip
+
+  release:
+    needs: [windows, macos]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      # runner 自带 gh，配内置 GITHUB_TOKEN，不引第三方 action
+      - name: 发布
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+             Ferry-windows-x64.zip Ferry-macos.zip \
+             --repo "$GITHUB_REPOSITORY" \
+             --title "$GITHUB_REF_NAME" \
+             --notes-file .github/release-notes.md

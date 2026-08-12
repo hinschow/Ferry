@@ -129,7 +129,22 @@ bash setup-mac.sh --pubkey "上一步的公钥" --host <IP> --alias <别名> --a
 | **macOS** | 双击 **`Ferry.app`**（`setup-mac.sh` 自动生成，可拖进「程序」或 Dock） |
 | 兜底 | `start-windows.bat` / `start-mac.command` / `python3 bridge_gui.py` |
 
-`Ferry.exe` 不在仓库里（11 MB 的二进制不适合进 git），自己构建一次即可：
+### 从哪拿 Ferry.exe / Ferry.app
+
+**二进制不在 git 里** —— PyInstaller 产物 11 MB 且几乎不可 delta 压缩，每次
+重新构建都是一个全新 blob 永久留在历史里（改 10 次就是 115 MB，而整个仓库
+现在才 250 KB）。它们放在 **[Releases](../../releases)**：打一个 `v*` 标签，
+GitHub Actions 会在 windows / macOS runner 上各构建一份，连同 `bridge_gui.py`
+和图标打包成开箱即用的 zip。
+
+```bash
+git tag v1.0.0 && git push origin v1.0.0     # 触发构建与发布
+```
+
+（仓库 Actions 页 → Build and release → Run workflow 可以先试跑一次，
+产物存在 artifact 里，不会建 Release。）
+
+**自己构建**也就一条命令：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File build-windows-exe.ps1
@@ -137,6 +152,7 @@ powershell -ExecutionPolicy Bypass -File build-windows-exe.ps1
 
 它自带 Python 和 Tk，装不装 Python 的机器都能跑。**它仍然执行同目录的
 `bridge_gui.py`** —— 所以控制台的「重载」自更新照常有效（把整个代码冻进去就没法自更新了）。
+也正因为这样，Release 的 zip 里必须连 `bridge_gui.py` 和 `assets/` 一起带上。
 
 macOS 那边同理，`Ferry.app` 是个免编译的 bundle，跑一次就有：
 
@@ -294,6 +310,7 @@ start-mac.command             零配置启动（不想生成 .app 时用）
 assets/ferry.png|.ico|.icns   应用图标
 tools/make-icons.py           重新生成图标（纯标准库）
 server/                       服务器端工具源码（唯一来源，改完直接生效）
+.github/workflows/            打 tag 自动构建并发布 Ferry.exe / Ferry.app
 README.md                     本文件
 ```
 
