@@ -1,0 +1,50 @@
+#!/bin/bash
+# 把当前挂载状态同步进 /root/CLAUDE.md 的标记区块，让新会话总能看到最新映射
+MD="${1:-/root/CLAUDE.md}"
+BEGIN='<!-- BRIDGE-MOUNTS:BEGIN 由 bridge-sync-md 自动生成，勿手改 -->'
+END='<!-- BRIDGE-MOUNTS:END -->'
+
+BODY=$(
+  echo "$BEGIN"
+  echo ""
+  echo "> 本节由 \`bridge-sync-md\` 生成，更新于 $(date '+%Y-%m-%d %H:%M')。"
+  echo "> **实时状态请跑 \`bridge-mounts\`；本表可能已过期。**"
+  echo ""
+  ACTIVE=$(sed -n 's/^ACTIVE_PROJECT=//p' /root/.winbridge/config 2>/dev/null | sed 's/#.*//' | tr -d "'\" ")
+  if [ -n "$ACTIVE" ]; then
+    echo "**当前主项目**：\`$ACTIVE\`"
+    echo ""
+  fi
+  echo "| 服务器路径 | 本机路径 | 机器 |"
+  echo "|---|---|---|"
+  awk '$3=="fuse.sshfs"{gsub(/\\040/," ",$2); print $2"\t"$1}' /proc/mounts | while IFS=$'\t' read -r mp src; do
+    case "$mp" in
+      /root/.winbridge/status/*) continue ;;   # 内部管道不展示
+    esac
+    client=$(printf '%s' "$mp" | sed -n 's|^/root/mnt/\([^/]*\)/.*|\1|p')
+    [ -z "$client" ] && client="-"
+    local_path=$(printf '%s' "$src" | sed 's/^[^:]*://; s|^/\([A-Za-z]\):|\1:|')
+    case "$local_path" in
+      [A-Za-z]:*) local_path=$(printf '%s' "$local_path" | tr '/' '\\') ;;
+    esac
+    echo "| \`$mp\` | \`$local_path\` | $client |"
+  done
+  echo ""
+  echo "$END"
+)
+
+if grep -q "BRIDGE-MOUNTS:BEGIN" "$MD" 2>/dev/null; then
+  python3 - "$MD" "$BODY" <<'PY'
+import re, sys
+md, body = sys.argv[1], sys.argv[2]
+s = open(md, encoding="utf-8").read()
+pat = re.compile(r"<!-- BRIDGE-MOUNTS:BEGIN.*?<!-- BRIDGE-MOUNTS:END -->", re.S)
+# 用函数做替换：字符串形式会把 body 里的 \c \b 当成正则转义（Windows 路径必踩）
+s = pat.sub(lambda _m: body, s)
+open(md, "w", encoding="utf-8").write(s)
+PY
+  echo "已更新 $MD 的挂载区块"
+else
+  printf '\n%s\n' "$BODY" >> "$MD"
+  echo "已在 $MD 末尾新增挂载区块"
+fi

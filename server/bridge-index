@@ -1,0 +1,65 @@
+#!/bin/bash
+# bridge-index [-c 客户端] [<挂载点>]  — 在客户端本机生成文件索引，存到服务器本地磁盘
+#
+# 策略：git 仓库优先用 `git ls-files`（秒级，天然遵守 .gitignore）；
+#       非 git 目录才走目录遍历 + /root/.winbridge/index-exclude.txt 的排除规则。
+. /root/.winbridge/lib.sh
+bridge_resolve_client "$@" || exit 1
+[ $BRIDGE_SHIFT -gt 0 ] && shift $BRIDGE_SHIFT
+IDX_DIR=/root/.winbridge/index
+mkdir -p "$IDX_DIR"
+
+TARGETS="$1"
+[ -z "$TARGETS" ] && TARGETS=$(awk -v p="$MNT_ROOT" '$3=="fuse.sshfs" && index($2,p)==1 {gsub(/\\040/," ",$2); print $2}' /proc/mounts)
+[ -z "$TARGETS" ] && { echo "ERR|该客户端没有挂载"; exit 1; }
+
+EXC_FILE=/root/.winbridge/index-exclude.txt
+EXCLUDES=$(grep -v '^[[:space:]]*#' "$EXC_FILE" 2>/dev/null | grep -v '^[[:space:]]*$')
+
+for MP in $TARGETS; do
+  SRC=$(awk -v m="$MP" '$3=="fuse.sshfs" && $2==m {print $1}' /proc/mounts | head -1)
+  [ -z "$SRC" ] && { echo "跳过（非挂载点）: $MP"; continue; }
+  LOCAL=$(printf '%s' "$SRC" | sed 's/^[^:]*://')
+  case "$OS" in windows) LOCAL=$(printf '%s' "$LOCAL" | sed 's|^/||' | tr '/' '\\') ;; esac
+
+  OUT="$IDX_DIR/${CLIENT}__$(basename "$MP").txt"
+  S=$(date +%s%N)
+  MODE=""
+
+  # --- 优先 git ---
+  if [ "$OS" = "windows" ]; then
+    GIT=$(bridge-run -c "$CLIENT" -d "$LOCAL" 'if (Test-Path ".git") { git ls-files 2>$null }' 2>/dev/null)
+  else
+    GIT=$(bridge-run -c "$CLIENT" -d "$LOCAL" '[ -d .git ] && git ls-files 2>/dev/null' 2>/dev/null)
+  fi
+  if [ -n "$GIT" ]; then
+    LIST="$GIT"; MODE="git ls-files"
+  else
+    # --- 回退：目录遍历 + 排除 ---
+    if [ "$OS" = "windows" ]; then
+      PAT=$(printf '%s' "$EXCLUDES" | sed 's|/|\\|g' | tr '\n' '|' | sed 's/|$//')
+      LIST=$(bridge-run -c "$CLIENT" -d "$LOCAL" "\$e='$PAT'.Split('|'); \$r=(Get-Location).Path
+Get-ChildItem -Recurse -File -Force -EA SilentlyContinue | ForEach-Object {
+  \$p=\$_.FullName.Substring(\$r.Length); \$skip=\$false
+  foreach (\$x in \$e) { if (\$x -and \$p.Contains('\\'+\$x+'\\')) { \$skip=\$true; break } }
+  if (-not \$skip) { \$p.TrimStart('\\') } }" 2>/dev/null)
+    else
+      A=""; while IFS= read -r e; do [ -n "$e" ] && A="$A -not -path \"*/$e/*\""; done <<< "$EXCLUDES"
+      LIST=$(bridge-run -c "$CLIENT" -d "$LOCAL" "find . -type f $A -printf '%P\n' 2>/dev/null" 2>/dev/null)
+    fi
+    MODE="目录遍历"
+  fi
+
+  [ -z "$LIST" ] && { echo "  ❌ $MP 索引失败"; continue; }
+  {
+    echo "# mount=$MP"
+    echo "# local=$LOCAL"
+    echo "# client=$CLIENT"
+    echo "# mode=$MODE"
+    echo "# built=$(date '+%Y-%m-%d %H:%M:%S')"
+    printf '%s\n' "$LIST" | sed 's/\r$//' | grep -v '^[[:space:]]*$'
+  } > "$OUT"
+  N=$(grep -vc '^#' "$OUT")
+  echo "  ✅ $(basename "$MP"): $N 个文件（$MODE），$(( ($(date +%s%N)-S)/1000000 ))ms"
+  [ "$N" -gt 80000 ] && echo "     ⚠️ 数量偏大，考虑往 $EXC_FILE 加排除规则"
+done

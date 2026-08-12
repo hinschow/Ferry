@@ -18,4 +18,9 @@ bash regen-installer.sh          # 会读取 /usr/local/bin/bridge-* 重新打�
 | `bridge-daemon` | 长驻进程（Windows→schtasks，Mac/Linux→nohup） |
 | `bridge-statusd` | 状态守护，每客户端一个 |
 | `bridge-add-client` | 手工添加客户端（一般用不到，客户端会自注册） |
+| `bridge-index` | 建文件索引（git 仓库走 `git ls-files`，否则目录遍历 + `index-exclude.txt`） |
+| `bridge-find` | 查索引，毫秒级定位文件，**取代在挂载上跑 Glob/find** |
+| `bridge-guard` | 守护：自动终止在挂载上跑超 20 秒的遍历进程 |
+| `bridge-sync-md` | 把当前挂载同步进 CLAUDE.md 的标记区块 |
 | `bridge-reset` | 清理卡死的 SSH 复用连接 |
+| `index-exclude.txt` | 非 git 目录的索引排除规则 |

@@ -57,6 +57,30 @@ else
   echo "    已生成 /root/.ssh/id_win"
 fi
 
+cat > /root/.winbridge/index-exclude.txt <<'EXCEOF'
+# bridge-index 的排除规则（每行一个目录名，匹配任意层级）
+# 注意：git 仓库优先用 git ls-files，天然遵守 .gitignore，通常用不到这里
+.git
+node_modules
+__pycache__
+.venv
+venv
+.tox
+.mypy_cache
+.pytest_cache
+.ruff_cache
+.uv-cache
+.cache
+.turbo
+.gradle
+dist
+build
+out
+target
+vendor
+site-packages
+EXCEOF
+
 echo "==> 4/5 安装命令行工具"
 
 cat > /root/.winbridge/lib.sh <<'LIB_EOF'
@@ -371,8 +395,339 @@ Write-Output 'stopped: ${NAME}'"
 esac
 TOOL_bridge_daemon_EOF
 
-chmod +x /usr/local/bin/bridge-run /usr/local/bin/bridge-mount /usr/local/bin/bridge-umount /usr/local/bin/bridge-mounts /usr/local/bin/bridge-check /usr/local/bin/bridge-grep /usr/local/bin/bridge-git /usr/local/bin/bridge-reset /usr/local/bin/bridge-statusd /usr/local/bin/bridge-daemon 
-for p in win-run:bridge-run win-check:bridge-check win-mounts:bridge-mounts win-grep:bridge-grep win-git:bridge-git win-reset:bridge-reset win-daemon:bridge-daemon; do
+cat > /usr/local/bin/bridge-register <<'TOOL_bridge_register_EOF'
+#!/bin/bash
+# bridge-register --name <名> --os <windows|macos|linux> --user <用户名>
+#                 [--tool-dir <路径>] [--status-local <路径>] [--label <说明>] [--port <端口>]
+#
+# 由客户端在建立隧道前自动调用：客户端把自己的身份上报，服务器分配端口并建档。
+# 输出形如  PORT=2224  供客户端解析。已存在则返回原端口（幂等）。
+NAME=""; OS=""; USER_=""; TOOL=""; SLOCAL=""; LABEL=""; PORT=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --name) NAME="$2"; shift 2 ;;
+    --os) OS="$2"; shift 2 ;;
+    --user) USER_="$2"; shift 2 ;;
+    --tool-dir) TOOL="$2"; shift 2 ;;
+    --status-local) SLOCAL="$2"; shift 2 ;;
+    --label) LABEL="$2"; shift 2 ;;
+    --port) PORT="$2"; shift 2 ;;
+    *) echo "ERR|未知参数: $1"; exit 1 ;;
+  esac
+done
+[ -z "$NAME" ] || [ -z "$OS" ] || [ -z "$USER_" ] && {
+  echo "ERR|--name --os --user 必填"; exit 1; }
+# 名字消毒，避免路径穿越
+NAME=$(printf '%s' "$NAME" | tr -cd '[:alnum:]._-' | cut -c1-40)
+[ -z "$NAME" ] && { echo "ERR|名字非法"; exit 1; }
+
+CONF="/root/.winbridge/clients/${NAME}.conf"
+mkdir -p /root/.winbridge/clients
+
+if [ -f "$CONF" ] && [ -z "$PORT" ]; then
+  PORT=$(sed -n 's/^PORT=//p' "$CONF" | sed 's/#.*//; s/[[:space:]]//g' | head -1)
+fi
+if [ -z "$PORT" ]; then
+  USED=$(grep -h '^PORT=' /root/.winbridge/clients/*.conf 2>/dev/null \
+         | cut -d= -f2 | sed 's/#.*//; s/[[:space:]]//g' | grep -E '^[0-9]+$')
+  PORT=2222
+  while echo "$USED" | grep -qx "$PORT" || ss -tln 2>/dev/null | grep -q ":$PORT "; do
+    PORT=$((PORT + 1))
+  done
+fi
+
+[ -z "$TOOL" ] && case "$OS" in
+  windows) TOOL='C:\bridge-console' ;;
+  *)       TOOL="/home/$USER_/bridge-console" ;;
+esac
+[ -z "$SLOCAL" ] && case "$OS" in
+  windows) SLOCAL="${TOOL}\\status\\${NAME}" ;;
+  *)       SLOCAL="${TOOL}/status/${NAME}" ;;
+esac
+[ -z "$LABEL" ] && LABEL="$NAME"
+
+cat > "$CONF" <<CFGEOF
+NAME=$NAME
+OS=$OS
+USER=$USER_
+PORT=$PORT
+LABEL='$LABEL'
+TOOL_DIR='$TOOL'
+STATUS_LOCAL='$SLOCAL'
+CFGEOF
+mkdir -p "/root/.winbridge/status/$NAME" "/root/mnt/$NAME"
+[ -f /root/.winbridge/current ] || echo "$NAME" > /root/.winbridge/current
+
+echo "PORT=$PORT"
+echo "NAME=$NAME"
+echo "OK|已登记 $NAME ($OS/$USER_) 端口 $PORT"
+TOOL_bridge_register_EOF
+
+cat > /usr/local/bin/bridge-add-client <<'TOOL_bridge_add_client_EOF'
+#!/bin/bash
+# bridge-add-client <名字> <windows|macos|linux> <该机器上的用户名> [端口]
+# 不给端口则自动挑一个没被占用的
+NAME="$1"; OS="$2"; USER="$3"; PORT="$4"
+[ -z "$NAME" ] || [ -z "$OS" ] || [ -z "$USER" ] && {
+  echo "用法: bridge-add-client <名字> <windows|macos|linux> <用户名> [端口]"; exit 1; }
+CONF="/root/.winbridge/clients/${NAME}.conf"
+[ -f "$CONF" ] && { echo "ERR|客户端 $NAME 已存在: $CONF"; exit 1; }
+
+if [ -z "$PORT" ]; then
+  # 逐行剥注释与空白（不能用 tr -d '[:space:]'，那会把换行也删掉，端口会粘连）
+  USED=$(grep -h '^PORT=' /root/.winbridge/clients/*.conf 2>/dev/null \
+         | cut -d= -f2 | sed 's/#.*//; s/[[:space:]]//g' | grep -E '^[0-9]+$')
+  PORT=2222
+  while echo "$USED" | grep -qx "$PORT" || ss -tln 2>/dev/null | grep -q ":$PORT "; do
+    PORT=$((PORT + 1))
+  done
+fi
+
+case "$OS" in
+  windows) TOOL='D:\bridge-console'; SLOCAL="D:\\bridge-console\\status\\${NAME}" ;;
+  *)       TOOL="/Users/$USER/bridge-console"; SLOCAL="/Users/$USER/bridge-console/status/${NAME}" ;;
+esac
+
+cat > "$CONF" <<CFGEOF
+NAME=$NAME
+OS=$OS
+USER=$USER
+PORT=$PORT
+LABEL='$NAME'
+TOOL_DIR='$TOOL'
+STATUS_LOCAL='$SLOCAL'
+CFGEOF
+mkdir -p "/root/.winbridge/status/$NAME" "/root/mnt/$NAME"
+
+PUB=$(cat /root/.ssh/id_win.pub 2>/dev/null)
+SRV=$(curl -s -m 5 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
+cat <<TIPEOF
+
+✅ 已创建客户端档案: $CONF
+   名字=$NAME  系统=$OS  用户=$USER  隧道端口=$PORT（自动避开已用端口）
+
+在【那台 $OS 机器】上执行：
+TIPEOF
+if [ "$OS" = "windows" ]; then
+cat <<TIPEOF
+  1) 复制 bridge-console 目录过去（含 bridge_gui.py / setup-windows.ps1）
+  2) 管理员 PowerShell:
+     powershell -ExecutionPolicy Bypass -File setup-windows.ps1 \\
+       -PubKey "$PUB" \\
+       -ServerHost $SRV -Alias $NAME -Port $PORT -LoopbackOnly -AutoStart
+  3) 双击 桌面客户端.bat → 「添加服务器…」→ SSH 别名填 $NAME
+TIPEOF
+else
+cat <<TIPEOF
+  1) 复制 bridge-console 目录过去（含 bridge_gui.py / setup-mac.sh）
+  2) 终端:
+     bash setup-mac.sh --pubkey "$PUB" \\
+       --host $SRV --alias $NAME --port $PORT --autostart
+  3) python3 bridge_gui.py → 「添加服务器…」→ SSH 别名填 $NAME
+TIPEOF
+fi
+cat <<TIPEOF
+
+回到服务器验证：  bridge-check -c $NAME
+TIPEOF
+TOOL_bridge_add_client_EOF
+
+cat > /usr/local/bin/bridge-index <<'TOOL_bridge_index_EOF'
+#!/bin/bash
+# bridge-index [-c 客户端] [<挂载点>]  — 在客户端本机生成文件索引，存到服务器本地磁盘
+#
+# 策略：git 仓库优先用 `git ls-files`（秒级，天然遵守 .gitignore）；
+#       非 git 目录才走目录遍历 + /root/.winbridge/index-exclude.txt 的排除规则。
+. /root/.winbridge/lib.sh
+bridge_resolve_client "$@" || exit 1
+[ $BRIDGE_SHIFT -gt 0 ] && shift $BRIDGE_SHIFT
+IDX_DIR=/root/.winbridge/index
+mkdir -p "$IDX_DIR"
+
+TARGETS="$1"
+[ -z "$TARGETS" ] && TARGETS=$(awk -v p="$MNT_ROOT" '$3=="fuse.sshfs" && index($2,p)==1 {gsub(/\\040/," ",$2); print $2}' /proc/mounts)
+[ -z "$TARGETS" ] && { echo "ERR|该客户端没有挂载"; exit 1; }
+
+EXC_FILE=/root/.winbridge/index-exclude.txt
+EXCLUDES=$(grep -v '^[[:space:]]*#' "$EXC_FILE" 2>/dev/null | grep -v '^[[:space:]]*$')
+
+for MP in $TARGETS; do
+  SRC=$(awk -v m="$MP" '$3=="fuse.sshfs" && $2==m {print $1}' /proc/mounts | head -1)
+  [ -z "$SRC" ] && { echo "跳过（非挂载点）: $MP"; continue; }
+  LOCAL=$(printf '%s' "$SRC" | sed 's/^[^:]*://')
+  case "$OS" in windows) LOCAL=$(printf '%s' "$LOCAL" | sed 's|^/||' | tr '/' '\\') ;; esac
+
+  OUT="$IDX_DIR/${CLIENT}__$(basename "$MP").txt"
+  S=$(date +%s%N)
+  MODE=""
+
+  # --- 优先 git ---
+  if [ "$OS" = "windows" ]; then
+    GIT=$(bridge-run -c "$CLIENT" -d "$LOCAL" 'if (Test-Path ".git") { git ls-files 2>$null }' 2>/dev/null)
+  else
+    GIT=$(bridge-run -c "$CLIENT" -d "$LOCAL" '[ -d .git ] && git ls-files 2>/dev/null' 2>/dev/null)
+  fi
+  if [ -n "$GIT" ]; then
+    LIST="$GIT"; MODE="git ls-files"
+  else
+    # --- 回退：目录遍历 + 排除 ---
+    if [ "$OS" = "windows" ]; then
+      PAT=$(printf '%s' "$EXCLUDES" | sed 's|/|\\|g' | tr '\n' '|' | sed 's/|$//')
+      LIST=$(bridge-run -c "$CLIENT" -d "$LOCAL" "\$e='$PAT'.Split('|'); \$r=(Get-Location).Path
+Get-ChildItem -Recurse -File -Force -EA SilentlyContinue | ForEach-Object {
+  \$p=\$_.FullName.Substring(\$r.Length); \$skip=\$false
+  foreach (\$x in \$e) { if (\$x -and \$p.Contains('\\'+\$x+'\\')) { \$skip=\$true; break } }
+  if (-not \$skip) { \$p.TrimStart('\\') } }" 2>/dev/null)
+    else
+      A=""; while IFS= read -r e; do [ -n "$e" ] && A="$A -not -path \"*/$e/*\""; done <<< "$EXCLUDES"
+      LIST=$(bridge-run -c "$CLIENT" -d "$LOCAL" "find . -type f $A -printf '%P\n' 2>/dev/null" 2>/dev/null)
+    fi
+    MODE="目录遍历"
+  fi
+
+  [ -z "$LIST" ] && { echo "  ❌ $MP 索引失败"; continue; }
+  {
+    echo "# mount=$MP"
+    echo "# local=$LOCAL"
+    echo "# client=$CLIENT"
+    echo "# mode=$MODE"
+    echo "# built=$(date '+%Y-%m-%d %H:%M:%S')"
+    printf '%s\n' "$LIST" | sed 's/\r$//' | grep -v '^[[:space:]]*$'
+  } > "$OUT"
+  N=$(grep -vc '^#' "$OUT")
+  echo "  ✅ $(basename "$MP"): $N 个文件（$MODE），$(( ($(date +%s%N)-S)/1000000 ))ms"
+  [ "$N" -gt 80000 ] && echo "     ⚠️ 数量偏大，考虑往 $EXC_FILE 加排除规则"
+done
+TOOL_bridge_index_EOF
+
+cat > /usr/local/bin/bridge-find <<'TOOL_bridge_find_EOF'
+#!/bin/bash
+# bridge-find <关键词>  — 在预建索引里秒查文件路径（不碰挂载）
+PAT="$*"
+[ -z "$PAT" ] && { echo "用法: bridge-find <文件名关键词>"; exit 1; }
+IDX_DIR=/root/.winbridge/index
+[ -d "$IDX_DIR" ] || { echo "尚无索引，先跑: bridge-index"; exit 1; }
+FOUND=0
+for f in "$IDX_DIR"/*.txt; do
+  [ -e "$f" ] || continue
+  MP=$(sed -n 's/^# mount=//p' "$f" | head -1)
+  BUILT=$(sed -n 's/^# built=//p' "$f" | head -1)
+  HITS=$(grep -iv '^#' "$f" | grep -i -- "$PAT")
+  [ -z "$HITS" ] && continue
+  FOUND=1
+  echo "── $MP  (索引于 $BUILT)"
+  printf '%s\n' "$HITS" | head -40 | while IFS='|' read -r p sz; do
+    if [ -n "$sz" ]; then printf '   %-70s %10s B\n' "$p" "$sz"
+    else printf '   %s\n' "$p"; fi
+  done
+  T=$(printf '%s\n' "$HITS" | wc -l)
+  [ "$T" -gt 40 ] && echo "   … 共 $T 条，已截断"
+done
+[ "$FOUND" = 0 ] && echo "无匹配。索引可能过期，跑 bridge-index 刷新。"
+TOOL_bridge_find_EOF
+
+cat > /usr/local/bin/bridge-guard <<'TOOL_bridge_guard_EOF'
+#!/bin/bash
+# bridge-guard start|stop|status|once
+# 守护挂载：自动终止在 /root/mnt/** 上做全树遍历的进程（Cursor 索引、误用的 find/rg 等）
+PIDF=/root/.winbridge/guard.pid
+LOG=/root/.winbridge/guard.log
+
+scan_once() {
+  local killed=0
+  for p in $(pgrep -f 'ripgrep|/rg |[^a-z]rg$|find |ls -R' 2>/dev/null); do
+    [ "$p" = "$$" ] && continue
+    local cwd cmd
+    cwd=$(readlink /proc/$p/cwd 2>/dev/null) || continue
+    cmd=$(tr '\0' ' ' < /proc/$p/cmdline 2>/dev/null)
+    # 只管作用在挂载上的；bridge-* 自己的命令放行
+    case "$cmd" in *bridge-*) continue ;; esac
+    case "$cwd" in
+      /root/mnt/*|/root/local-project*) ;;
+      *) case "$cmd" in *"/root/mnt/"*|*"/root/local-project"*) ;; *) continue ;; esac ;;
+    esac
+    # 跑满 20 秒才动手，避免误杀正常的短命令
+    local et; et=$(ps -o etimes= -p "$p" 2>/dev/null | tr -d ' ')
+    [ -z "$et" ] && continue
+    [ "$et" -lt 20 ] && continue
+    echo "$(date '+%F %T') KILL pid=$p et=${et}s cwd=$cwd cmd=$(echo "$cmd" | cut -c1-90)" >> "$LOG"
+    kill -9 "$p" 2>/dev/null && killed=$((killed+1))
+  done
+  echo "$killed"
+}
+
+case "$1" in
+  once)   n=$(scan_once); echo "本次终止 $n 个" ;;
+  start)
+    if [ -f "$PIDF" ] && kill -0 "$(cat "$PIDF")" 2>/dev/null; then
+      echo "已在运行 (pid $(cat "$PIDF"))"; exit 0; fi
+    setsid bash -c "$(declare -f scan_once); while true; do scan_once >/dev/null; sleep 10; done" \
+      >/dev/null 2>&1 < /dev/null &
+    echo $! > "$PIDF"; echo "守护已启动 (pid $!)，日志 $LOG" ;;
+  stop)   [ -f "$PIDF" ] && kill "$(cat "$PIDF")" 2>/dev/null && rm -f "$PIDF" && echo "已停止" || echo "未运行" ;;
+  status)
+    if [ -f "$PIDF" ] && kill -0 "$(cat "$PIDF")" 2>/dev/null; then echo "运行中 (pid $(cat "$PIDF"))"
+    else echo "未运行"; fi
+    [ -f "$LOG" ] && { echo "--- 最近拦截 ---"; tail -5 "$LOG"; } ;;
+  *) echo "用法: bridge-guard start|stop|status|once"; exit 1 ;;
+esac
+TOOL_bridge_guard_EOF
+
+cat > /usr/local/bin/bridge-sync-md <<'TOOL_bridge_sync_md_EOF'
+#!/bin/bash
+# 把当前挂载状态同步进 /root/CLAUDE.md 的标记区块，让新会话总能看到最新映射
+MD="${1:-/root/CLAUDE.md}"
+BEGIN='<!-- BRIDGE-MOUNTS:BEGIN 由 bridge-sync-md 自动生成，勿手改 -->'
+END='<!-- BRIDGE-MOUNTS:END -->'
+
+BODY=$(
+  echo "$BEGIN"
+  echo ""
+  echo "> 本节由 \`bridge-sync-md\` 生成，更新于 $(date '+%Y-%m-%d %H:%M')。"
+  echo "> **实时状态请跑 \`bridge-mounts\`；本表可能已过期。**"
+  echo ""
+  ACTIVE=$(sed -n 's/^ACTIVE_PROJECT=//p' /root/.winbridge/config 2>/dev/null | sed 's/#.*//' | tr -d "'\" ")
+  if [ -n "$ACTIVE" ]; then
+    echo "**当前主项目**：\`$ACTIVE\`"
+    echo ""
+  fi
+  echo "| 服务器路径 | 本机路径 | 机器 |"
+  echo "|---|---|---|"
+  awk '$3=="fuse.sshfs"{gsub(/\\040/," ",$2); print $2"\t"$1}' /proc/mounts | while IFS=$'\t' read -r mp src; do
+    case "$mp" in
+      /root/.winbridge/status/*) continue ;;   # 内部管道不展示
+    esac
+    client=$(printf '%s' "$mp" | sed -n 's|^/root/mnt/\([^/]*\)/.*|\1|p')
+    [ -z "$client" ] && client="-"
+    local_path=$(printf '%s' "$src" | sed 's/^[^:]*://; s|^/\([A-Za-z]\):|\1:|')
+    case "$local_path" in
+      [A-Za-z]:*) local_path=$(printf '%s' "$local_path" | tr '/' '\\') ;;
+    esac
+    echo "| \`$mp\` | \`$local_path\` | $client |"
+  done
+  echo ""
+  echo "$END"
+)
+
+if grep -q "BRIDGE-MOUNTS:BEGIN" "$MD" 2>/dev/null; then
+  python3 - "$MD" "$BODY" <<'PY'
+import re, sys
+md, body = sys.argv[1], sys.argv[2]
+s = open(md, encoding="utf-8").read()
+pat = re.compile(r"<!-- BRIDGE-MOUNTS:BEGIN.*?<!-- BRIDGE-MOUNTS:END -->", re.S)
+# 用函数做替换：字符串形式会把 body 里的 \c \b 当成正则转义（Windows 路径必踩）
+s = pat.sub(lambda _m: body, s)
+open(md, "w", encoding="utf-8").write(s)
+PY
+  echo "已更新 $MD 的挂载区块"
+else
+  printf '\n%s\n' "$BODY" >> "$MD"
+  echo "已在 $MD 末尾新增挂载区块"
+fi
+TOOL_bridge_sync_md_EOF
+
+chmod +x /usr/local/bin/bridge-run /usr/local/bin/bridge-mount /usr/local/bin/bridge-umount /usr/local/bin/bridge-mounts /usr/local/bin/bridge-check /usr/local/bin/bridge-grep /usr/local/bin/bridge-git /usr/local/bin/bridge-reset /usr/local/bin/bridge-statusd /usr/local/bin/bridge-daemon /usr/local/bin/bridge-register /usr/local/bin/bridge-add-client /usr/local/bin/bridge-index /usr/local/bin/bridge-find /usr/local/bin/bridge-guard /usr/local/bin/bridge-sync-md 
+for p in win-run:bridge-run win-check:bridge-check win-mounts:bridge-mounts win-grep:bridge-grep win-git:bridge-git win-reset:bridge-reset win-daemon:bridge-daemon win-mount:bridge-mount win-umount:bridge-umount; do
   ln -sfn "/usr/local/bin/${p##*:}" "/usr/local/bin/${p%%:*}"; done
 echo "    bridge-run bridge-mount bridge-umount bridge-mounts bridge-check bridge-grep bridge-git bridge-statusd bridge-daemon（含 win-* 兼容软链）"
 echo "==> 5/5 完成"

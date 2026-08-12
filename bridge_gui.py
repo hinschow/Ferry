@@ -408,7 +408,8 @@ class Server:
         port = self.conf.get("tunnel_port", 2222)
         cmd = (f"win-statusd start >/dev/null 2>&1; "
                f"ss -tln 2>/dev/null | grep -q ':{port} ' && echo PORT_OK || echo PORT_NO; "
-               f"uptime -p 2>/dev/null; echo ---; win-mounts 2>/dev/null")
+               f"uptime -p 2>/dev/null; echo ---; "
+               f"bridge-mounts -c {machine_id()} 2>/dev/null")
         rc, out = self.on_server(cmd)
         with self.lock:
             if rc != 0:
@@ -851,7 +852,9 @@ class BridgeApp:
         self._persist()
         self.log(f"已添加服务器 {srv.label} ({srv.alias})")
         self.log(f"  → 记得在该服务器上把状态目录挂过去："
-                 f"win-mount '{os.path.join(STATUS_ROOT, srv.sid)}' /root/.winbridge/status")
+                 f"bridge-mount -c {machine_id()} "
+                 f"{shlex_quote(os.path.join(STATUS_ROOT, srv.sid))} "
+                 f"/root/.winbridge/status/{machine_id()}")
         self._refresh_servers()
 
     def act_edit_server(self):
@@ -1001,7 +1004,8 @@ class BridgeApp:
                 self.log(f"[{srv.label}] 隧道未连接，无法挂载", "error")
                 return
             self.log(f"[{srv.label}] 挂载 {path} …")
-            rc, out = srv.on_server(f"win-mount '{path}'", 60)
+            rc, out = srv.on_server(
+                f"bridge-mount -c {machine_id()} {shlex_quote(path)}", 60)
             line = out.strip().splitlines()[-1] if out.strip() else ""
             if line.startswith(("OK|", "ALREADY|")):
                 self.log(f"  → {line.split('|', 1)[1]}")
@@ -1013,7 +1017,8 @@ class BridgeApp:
     def _do_umount(self, srv, path, mp):
         def job():
             self.log(f"[{srv.label}] 卸载 {path} …")
-            rc, out = srv.on_server(f"win-umount '{mp}'", 40)
+            rc, out = srv.on_server(
+                f"bridge-umount -c {machine_id()} {shlex_quote(mp)}", 40)
             line = out.strip().splitlines()[-1] if out.strip() else ""
             ok = line.startswith("OK|")
             self.log("  已卸载" if ok else f"  失败: {line.split('|', 1)[-1] or out.strip()}",

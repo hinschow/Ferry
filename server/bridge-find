@@ -1,0 +1,23 @@
+#!/bin/bash
+# bridge-find <关键词>  — 在预建索引里秒查文件路径（不碰挂载）
+PAT="$*"
+[ -z "$PAT" ] && { echo "用法: bridge-find <文件名关键词>"; exit 1; }
+IDX_DIR=/root/.winbridge/index
+[ -d "$IDX_DIR" ] || { echo "尚无索引，先跑: bridge-index"; exit 1; }
+FOUND=0
+for f in "$IDX_DIR"/*.txt; do
+  [ -e "$f" ] || continue
+  MP=$(sed -n 's/^# mount=//p' "$f" | head -1)
+  BUILT=$(sed -n 's/^# built=//p' "$f" | head -1)
+  HITS=$(grep -iv '^#' "$f" | grep -i -- "$PAT")
+  [ -z "$HITS" ] && continue
+  FOUND=1
+  echo "── $MP  (索引于 $BUILT)"
+  printf '%s\n' "$HITS" | head -40 | while IFS='|' read -r p sz; do
+    if [ -n "$sz" ]; then printf '   %-70s %10s B\n' "$p" "$sz"
+    else printf '   %s\n' "$p"; fi
+  done
+  T=$(printf '%s\n' "$HITS" | wc -l)
+  [ "$T" -gt 40 ] && echo "   … 共 $T 条，已截断"
+done
+[ "$FOUND" = 0 ] && echo "无匹配。索引可能过期，跑 bridge-index 刷新。"

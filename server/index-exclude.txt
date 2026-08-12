@@ -1,0 +1,24 @@
+# bridge-index 的排除规则（每行一个目录名，匹配任意层级）
+#
+# 注意：git 仓库优先走 `git ls-files`，天然遵守 .gitignore，通常用不到这个文件。
+# 只有非 git 目录才会用到这里的规则。
+.git
+node_modules
+__pycache__
+.venv
+venv
+.tox
+.mypy_cache
+.pytest_cache
+.ruff_cache
+.uv-cache
+.cache
+.turbo
+.gradle
+Pods
+dist
+build
+out
+target
+vendor
+site-packages

@@ -1,0 +1,44 @@
+#!/bin/bash
+# bridge-guard start|stop|status|once
+# 守护挂载：自动终止在 /root/mnt/** 上做全树遍历的进程（Cursor 索引、误用的 find/rg 等）
+PIDF=/root/.winbridge/guard.pid
+LOG=/root/.winbridge/guard.log
+
+scan_once() {
+  local killed=0
+  for p in $(pgrep -f 'ripgrep|/rg |[^a-z]rg$|find |ls -R' 2>/dev/null); do
+    [ "$p" = "$$" ] && continue
+    local cwd cmd
+    cwd=$(readlink /proc/$p/cwd 2>/dev/null) || continue
+    cmd=$(tr '\0' ' ' < /proc/$p/cmdline 2>/dev/null)
+    # 只管作用在挂载上的；bridge-* 自己的命令放行
+    case "$cmd" in *bridge-*) continue ;; esac
+    case "$cwd" in
+      /root/mnt/*|/root/local-project*) ;;
+      *) case "$cmd" in *"/root/mnt/"*|*"/root/local-project"*) ;; *) continue ;; esac ;;
+    esac
+    # 跑满 20 秒才动手，避免误杀正常的短命令
+    local et; et=$(ps -o etimes= -p "$p" 2>/dev/null | tr -d ' ')
+    [ -z "$et" ] && continue
+    [ "$et" -lt 20 ] && continue
+    echo "$(date '+%F %T') KILL pid=$p et=${et}s cwd=$cwd cmd=$(echo "$cmd" | cut -c1-90)" >> "$LOG"
+    kill -9 "$p" 2>/dev/null && killed=$((killed+1))
+  done
+  echo "$killed"
+}
+
+case "$1" in
+  once)   n=$(scan_once); echo "本次终止 $n 个" ;;
+  start)
+    if [ -f "$PIDF" ] && kill -0 "$(cat "$PIDF")" 2>/dev/null; then
+      echo "已在运行 (pid $(cat "$PIDF"))"; exit 0; fi
+    setsid bash -c "$(declare -f scan_once); while true; do scan_once >/dev/null; sleep 10; done" \
+      >/dev/null 2>&1 < /dev/null &
+    echo $! > "$PIDF"; echo "守护已启动 (pid $!)，日志 $LOG" ;;
+  stop)   [ -f "$PIDF" ] && kill "$(cat "$PIDF")" 2>/dev/null && rm -f "$PIDF" && echo "已停止" || echo "未运行" ;;
+  status)
+    if [ -f "$PIDF" ] && kill -0 "$(cat "$PIDF")" 2>/dev/null; then echo "运行中 (pid $(cat "$PIDF"))"
+    else echo "未运行"; fi
+    [ -f "$LOG" ] && { echo "--- 最近拦截 ---"; tail -5 "$LOG"; } ;;
+  *) echo "用法: bridge-guard start|stop|status|once"; exit 1 ;;
+esac
