@@ -7,15 +7,17 @@
 #
 # ⚠️ 接入码等同于本服务器的登录凭据，只发给你信任的机器。
 set -e
-NAME=""; HOST=""; REVOKE=""; LIST=""
+NAME=""; HOST=""; REVOKE=""; LIST=""; SHOW=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --name) NAME="$2"; shift 2 ;;
     --host) HOST="$2"; shift 2 ;;
     --revoke) REVOKE="$2"; shift 2 ;;
     --list|-l) LIST=1; shift ;;
+    --show) SHOW="$2"; shift 2 ;;
     *) echo "用法: bridge-invite [--name 名字] [--host 对外地址]"
        echo "      bridge-invite --list              列出已发放的接入码"
+       echo "      bridge-invite --show <名字>       重新显示已有的接入码"
        echo "      bridge-invite --revoke <名字>     撤销某台机器"
        exit 1 ;;
   esac
@@ -56,8 +58,42 @@ if [ -n "$REVOKE" ]; then
   exit 0
 fi
 
-[ -z "$NAME" ] && NAME="client-$(date +%m%d%H%M)"
-NAME=$(printf '%s' "$NAME" | tr -cd '[:alnum:]._-' | cut -c1-32)
+# ---- 重新显示已有接入码 ----
+if [ -n "$SHOW" ]; then
+  NAME=$(printf '%s' "$SHOW" | tr -cd '[:alnum:]._-' | cut -c1-32)
+  [ -f "$KEYDIR/$NAME" ] || { echo "找不到接入码: $NAME"; echo "  用 bridge-invite --list 看已有的"; exit 1; }
+  FP=$(awk '{print $2}' "$KEYDIR/$NAME.pub")
+  grep -qF "$FP" /root/.ssh/authorized_keys 2>/dev/null || {
+    echo "接入码 $NAME 已被撤销，无法再使用。"
+    echo "  重新发放： bridge-invite --name $NAME"; exit 1; }
+else
+  [ -z "$NAME" ] && NAME="client-$(date +%m%d%H%M)"
+  NAME=$(printf '%s' "$NAME" | tr -cd '[:alnum:]._-' | cut -c1-32)
+
+  # ---- 重名保护：同名会共享同一把钥匙，撤销时一起失效，所以直接拦住 ----
+  if [ -f "$KEYDIR/$NAME.pub" ]; then
+    FP=$(awk '{print $2}' "$KEYDIR/$NAME.pub")
+    if grep -qF "$FP" /root/.ssh/authorized_keys 2>/dev/null; then ST="仍然有效"; else ST="已被撤销"; fi
+    # 找一个可用的替代名
+    i=2; SUG="$NAME-$i"
+    while [ -f "$KEYDIR/$SUG.pub" ]; do i=$((i+1)); SUG="$NAME-$i"; done
+    cat >&2 <<DUPEOF
+
+✗ 接入码 "$NAME" 已存在（$ST，发放于 $(date -r "$KEYDIR/$NAME.pub" '+%Y-%m-%d %H:%M')）
+
+  同名会让两台机器共用一把钥匙 —— 撤销任一台，另一台也会一起失效。
+  请从下面三条里选一条：
+
+    1) 换个名字           bridge-invite --name $SUG
+    2) 重新显示原来那张   bridge-invite --show $NAME
+    3) 先吊销再重发       bridge-invite --revoke $NAME && bridge-invite --name $NAME
+
+  已有的接入码： bridge-invite --list
+
+DUPEOF
+    exit 1
+  fi
+fi
 [ -z "$HOST" ] && HOST=$(curl -s -m 5 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
 [ -z "$HOST" ] && { echo "取不到本机对外地址，请用 --host 指定"; exit 1; }
 
@@ -91,18 +127,21 @@ print("FERRY1:" + base64.urlsafe_b64encode(zlib.compress(raw, 9)).decode())
 PY
 )
 
+[ -n "$SHOW" ] && TITLE="接入码（重新显示）" || TITLE="接入码已生成"
 cat <<TIPEOF
 
 ════════════════════════════════════════════════════════════════
-  接入码已生成    服务器 $HOST    标识 $NAME
+  $TITLE    服务器 $HOST    标识 $NAME
 ════════════════════════════════════════════════════════════════
 
 $TOKEN
 
 ────────────────────────────────────────────────────────────────
-  用法：打开客户端 → 「添加服务器…」→ 点「粘贴接入码」→ 粘贴上面整段
+  用法：打开客户端 → 「添加服务器…」→ 选「粘贴接入码」→ 粘贴上面整段
 
   ⚠️ 这段码包含本服务器的登录凭据，只发给你信任的机器。
-     撤销：  bridge-invite --revoke $NAME
+     查看全部： bridge-invite --list
+     再看这张： bridge-invite --show $NAME
+     吊销这台： bridge-invite --revoke $NAME
 ════════════════════════════════════════════════════════════════
 TIPEOF
