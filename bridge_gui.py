@@ -37,14 +37,39 @@ DEFAULT_CFG = {
     "font_size": 11,
     "font_family": None,      # None = 按平台自动选择
     "mono_family": None,
+    "theme": "dark",          # dark | light
+    "log_open": True,
 }
 
 NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
-# 配色：低饱和、留白充足，深浅背景下都清晰
-C_OK, C_BAD, C_NA, C_WARN = "#12855a", "#d0342c", "#98a2b3", "#b45309"
-C_BG, C_CARD, C_LINE = "#f5f6f8", "#ffffff", "#e4e7ec"
-C_TEXT, C_MUTED, C_ACCENT = "#101828", "#667085", "#175cd3"
+# 配色。CARD2 是卡片里的次级块（展开区、选中行），比卡片再深/浅一档。
+THEMES = {
+    "dark": dict(
+        BG="#15171c", CARD="#1d2027", CARD2="#262a33", LINE="#333945",
+        TEXT="#e6e8ec", MUTED="#8b93a1", ACCENT="#4c8dff", ACCENT_H="#3a7ae8",
+        OK="#3ecf8e", BAD="#f2555a", WARN="#e3a008", NA="#6b7280",
+        SEL="#2d3646", INPUT="#14161a",
+    ),
+    "light": dict(
+        BG="#f5f6f8", CARD="#ffffff", CARD2="#f2f4f7", LINE="#e4e7ec",
+        TEXT="#101828", MUTED="#667085", ACCENT="#175cd3", ACCENT_H="#1249ab",
+        OK="#12855a", BAD="#d0342c", WARN="#b45309", NA="#98a2b3",
+        SEL="#e6efff", INPUT="#ffffff",
+    ),
+}
+
+
+def apply_theme(name):
+    """把配色写进模块级常量 —— 界面代码到处直接引用它们"""
+    t = THEMES.get(name) or THEMES["dark"]
+    g = globals()
+    for k, v in t.items():
+        g["C_" + k] = v
+    g["THEME"] = name if name in THEMES else "dark"
+
+
+apply_theme("dark")           # 先给个默认，读到配置后再按用户选择覆盖
 
 IS_WIN = sys.platform == "win32"
 IS_MAC = sys.platform == "darwin"
@@ -236,6 +261,7 @@ def save_cfg(cfg):
 
 
 CFG = load_cfg()
+apply_theme(CFG.get("theme", "dark"))
 
 
 # ================================================================ 命令执行
@@ -740,7 +766,8 @@ class InviteDialog(tk.Toplevel):
 
         self.txt = tk.Text(wrap, width=64, height=7, font=f_mono, wrap="char",
                            relief="flat", bd=1, highlightthickness=1,
-                           highlightbackground=C_LINE, bg="#fbfcfd")
+                           highlightbackground=C_LINE, bg=C_INPUT, fg=C_TEXT,
+                           insertbackground=C_TEXT, selectbackground=C_SEL)
         self.txt.pack(fill="both", expand=True)
         self.txt.focus_set()
 
@@ -753,7 +780,7 @@ class InviteDialog(tk.Toplevel):
                   bg=C_CARD, fg=C_MUTED, activebackground=C_CARD, cursor="hand2",
                   padx=14, pady=6, font=f_base).pack(side="right")
         tk.Button(bar, text="接入", command=self._go, relief="flat", bd=0,
-                  bg=C_ACCENT, fg="#ffffff", activebackground="#1249ab",
+                  bg=C_ACCENT, fg="#ffffff", activebackground=C_ACCENT_H,
                   activeforeground="#fff", cursor="hand2", padx=22, pady=6,
                   font=f_base).pack(side="right", padx=(0, 8))
         tk.Button(bar, text="从剪贴板读取", command=self._paste, relief="flat", bd=0,
@@ -814,7 +841,9 @@ class RemoteBrowser(tk.Toplevel):
                    command=lambda: self._load(self.path_var.get().strip())).pack(side="left", padx=(6, 0))
         ttk.Button(top, text="上一层", width=8, command=self._up).pack(side="left", padx=(6, 0))
 
-        self.lst = tk.Listbox(frm, activestyle="none", highlightthickness=0)
+        self.lst = tk.Listbox(frm, activestyle="none", highlightthickness=0,
+                              bg=C_INPUT, fg=C_TEXT, selectbackground=C_SEL,
+                              selectforeground=C_TEXT, bd=0, relief="flat")
         self.lst.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
         self.lst.bind("<Double-1>", lambda _e: self._enter())
 
@@ -1157,6 +1186,7 @@ class BridgeApp:
         self._build_ui()
         self.log(f"{APP_NAME} 启动")
         self._load_servers()
+        self._rebuild_server_list()     # 建界面时还没加载服务器，这里补一次
 
         threading.Thread(target=self._poll_local_loop, daemon=True).start()
         threading.Thread(target=self._poll_remote_loop, daemon=True).start()
@@ -1193,16 +1223,10 @@ class BridgeApp:
         self.act_add_server()
 
     def current(self):
-        """当前选中的服务器；列表未就绪时退回第一台"""
-        try:
-            sel = self.tree_srv.selection()
-            if sel:
-                label = self.tree_srv.item(sel[0], "values")[0]
-                m = next((s for s in self.servers if s.label == label), None)
-                if m:
-                    return m
-        except Exception:  # noqa: BLE001
-            pass
+        """当前选中的服务器；选中项失效时退回第一台"""
+        m = next((s for s in self.servers if s.sid == getattr(self, "sel_sid", None)), None)
+        if m:
+            return m
         return self.servers[0] if self.servers else None
 
     def _persist(self):
@@ -1230,12 +1254,15 @@ class BridgeApp:
         self.f_big = (fam, fs + 3, "bold")
         self.f_mono = (mono, max(fs - 1, 9))
 
-        w, h = int(60 * fs + 260), int(52 * fs + 210)
+        w, h = int(78 * fs + 300), int(50 * fs + 220)
         r.geometry(f"{w}x{h}")
-        r.minsize(int(w * 0.8), int(h * 0.75))
+        # 最小宽度按「侧栏 + 挂载表 + 工具条」的实际需要给，再窄按钮就会被挤掉
+        r.minsize(int(fs * 62 + 260), int(h * 0.7))
         r.option_add("*Font", self.f_base)
 
         st = ttk.Style()
+        # clam 必须排第一：vista/winnative 会忽略 background，暗色主题下按钮
+        # 和输入框会留一块刺眼的白
         for theme in ("clam", "vista", "winnative", "default"):
             if theme in st.theme_names():
                 st.theme_use(theme)
@@ -1243,22 +1270,59 @@ class BridgeApp:
         st.configure(".", font=self.f_base, background=C_BG, foreground=C_TEXT)
         st.configure("TFrame", background=C_BG)
         st.configure("Card.TFrame", background=C_CARD, relief="flat")
+        st.configure("Card2.TFrame", background=C_CARD2, relief="flat")
         st.configure("TLabel", background=C_CARD, foreground=C_TEXT)
         st.configure("Bg.TLabel", background=C_BG, foreground=C_TEXT)
         st.configure("Sub.TLabel", background=C_CARD, foreground=C_MUTED, font=self.f_sub)
         st.configure("SubBg.TLabel", background=C_BG, foreground=C_MUTED, font=self.f_sub)
+        st.configure("Sub2.TLabel", background=C_CARD2, foreground=C_MUTED, font=self.f_sub)
+        st.configure("Val2.TLabel", background=C_CARD2, foreground=C_TEXT)
         st.configure("Head.TLabel", background=C_BG, foreground=C_TEXT, font=self.f_head)
         st.configure("Big.TLabel", background=C_CARD, foreground=C_TEXT, font=self.f_big)
-        st.configure("TButton", font=self.f_base, padding=(12, 7))
-        st.map("TButton", foreground=[("disabled", C_NA)])
-        st.configure("Accent.TButton", font=self.f_bold, padding=(16, 8))
+
+        st.configure("TButton", font=self.f_base, padding=(12, 7),
+                     background=C_CARD2, foreground=C_TEXT,
+                     bordercolor=C_LINE, lightcolor=C_CARD2, darkcolor=C_CARD2,
+                     focuscolor=C_ACCENT, relief="flat")
+        st.map("TButton",
+               background=[("disabled", C_CARD), ("pressed", C_SEL), ("active", C_SEL)],
+               foreground=[("disabled", C_NA)],
+               lightcolor=[("active", C_SEL)], darkcolor=[("active", C_SEL)])
+        st.configure("Tool.TButton", padding=(9, 5))
+        st.configure("Accent.TButton", font=self.f_bold, padding=(11, 5),
+                     background=C_ACCENT, foreground="#ffffff",
+                     lightcolor=C_ACCENT, darkcolor=C_ACCENT)
+        st.map("Accent.TButton",
+               background=[("active", C_ACCENT_H), ("pressed", C_ACCENT_H)],
+               lightcolor=[("active", C_ACCENT_H)], darkcolor=[("active", C_ACCENT_H)])
+
         st.configure("Treeview", font=self.f_base, rowheight=int(fs * 2.5),
-                     background=C_CARD, fieldbackground=C_CARD, borderwidth=0)
-        st.configure("Treeview.Heading", font=self.f_sub, background=C_BG,
-                     foreground=C_MUTED, relief="flat", padding=(6, 6))
-        st.map("Treeview.Heading", background=[("active", C_BG)])
-        st.configure("TCheckbutton", background=C_CARD)
+                     background=C_CARD, fieldbackground=C_CARD,
+                     foreground=C_TEXT, borderwidth=0, relief="flat",
+                     bordercolor=C_CARD, lightcolor=C_CARD, darkcolor=C_CARD)
+        st.map("Treeview", background=[("selected", C_SEL)],
+               foreground=[("selected", C_TEXT)])
+        st.configure("Treeview.Heading", font=self.f_sub, background=C_CARD2,
+                     foreground=C_MUTED, relief="flat", padding=(6, 6),
+                     borderwidth=0)
+        st.map("Treeview.Heading", background=[("active", C_CARD2)])
+
+        # 输入框：clam 下这几个键才管得住边框，少一个就会露出浅色描边
+        st.configure("TEntry", fieldbackground=C_INPUT, foreground=C_TEXT,
+                     insertcolor=C_TEXT, bordercolor=C_LINE,
+                     lightcolor=C_LINE, darkcolor=C_LINE, padding=4)
+        st.map("TEntry", bordercolor=[("focus", C_ACCENT)],
+               lightcolor=[("focus", C_ACCENT)], darkcolor=[("focus", C_ACCENT)])
+        st.configure("TCheckbutton", background=C_CARD, foreground=C_TEXT,
+                     indicatorcolor=C_INPUT, focuscolor=C_ACCENT)
+        st.map("TCheckbutton", indicatorcolor=[("selected", C_ACCENT)],
+               background=[("active", C_CARD)])
         st.configure("TSeparator", background=C_LINE)
+        st.configure("Vertical.TScrollbar", background=C_CARD2, troughcolor=C_BG,
+                     bordercolor=C_BG, arrowcolor=C_MUTED, relief="flat")
+        st.map("Vertical.TScrollbar", background=[("active", C_LINE)])
+        # 弹窗默认底色跟着主题走，否则新窗口会闪出系统灰
+        r.option_add("*Toplevel.background", C_CARD)
 
         pad = int(fs * 1.5)
         outer = ttk.Frame(r, padding=(pad, pad, pad, int(pad * 0.6)))
@@ -1273,166 +1337,316 @@ class BridgeApp:
             inner.pack(fill="both", expand=True)
             return box, inner
 
-        # ═══════════ 顶部：标题 + 全局状态 ═══════════
+        def flat_btn(parent, text, cmd, fg=C_MUTED, hover=None, bg=C_BG, **kw):
+            return tk.Button(parent, text=text, command=cmd, relief="flat", bd=0,
+                             bg=bg, fg=fg, activebackground=bg,
+                             activeforeground=hover or C_ACCENT, cursor="hand2",
+                             highlightthickness=0, font=self.f_sub, **kw)
+        self.flat_btn = flat_btn
+
+        # ═══════════ 顶栏：标题 · 本机 SSH · 全局动作 ═══════════
         top = ttk.Frame(outer)
         top.pack(fill="x", pady=(0, pad))
         ttk.Label(top, text="Ferry", style="Head.TLabel").pack(side="left")
-        ttk.Label(top, text="桥接控制台", style="SubBg.TLabel").pack(side="left", padx=(8, 0), pady=(6, 0))
+        ttk.Label(top, text="桥接控制台", style="SubBg.TLabel").pack(
+            side="left", padx=(8, 0), pady=(6, 0))
 
-        self.btn_reload = tk.Button(top, text="重载", command=self.act_reload,
-                                    relief="flat", bd=0, bg=C_BG, fg=C_MUTED,
-                                    activebackground=C_BG, activeforeground=C_ACCENT,
-                                    cursor="hand2", padx=10, pady=4, font=self.f_sub)
+        self.btn_reload = flat_btn(top, "重载", self.act_reload, padx=10, pady=4)
         self.btn_reload.pack(side="right")
-        self.btn_panic = tk.Button(top, text="紧急断开", command=self.act_panic,
-                                   relief="flat", bd=0, bg=C_BG, fg=C_BAD,
-                                   activebackground=C_BG, activeforeground="#8f1d18",
-                                   cursor="hand2", padx=10, pady=4, font=self.f_sub)
+        self.btn_theme = flat_btn(top, "☀ 浅色" if THEME == "dark" else "☾ 深色",
+                                  self.act_theme, padx=10, pady=4)
+        self.btn_theme.pack(side="right", padx=(0, 4))
+        self.btn_panic = flat_btn(top, "紧急断开", self.act_panic,
+                                  fg=C_BAD, hover="#ff8b8f", padx=10, pady=4)
         self.btn_panic.pack(side="right", padx=(0, 10))
 
-        # ═══════════ 主卡片：当前服务器的状态与主操作 ═══════════
-        box, main = card(outer)
-        box.pack(fill="x", pady=(0, pad))
-
-        head = ttk.Frame(main, style="Card.TFrame")
-        head.pack(fill="x")
-        self.lbl_srv = ttk.Label(head, text="尚未配置服务器", style="Big.TLabel")
-        self.lbl_srv.pack(side="left")
-        self.lbl_srv_sub = ttk.Label(head, text="", style="Sub.TLabel")
-        self.lbl_srv_sub.pack(side="left", padx=(10, 0))
-
-        self.btn_primary = tk.Button(head, text="连接", command=self.act_primary,
-                                     relief="flat", bd=0, bg=C_ACCENT, fg="#ffffff",
-                                     activebackground="#1249ab", activeforeground="#fff",
-                                     cursor="hand2", padx=22, pady=7, font=self.f_bold)
-        self.btn_primary.pack(side="right")
-
-        ttk.Separator(main, orient="horizontal").pack(fill="x", pady=(int(pad * 0.7), int(pad * 0.6)))
-
-        # 三个状态指示
-        row = ttk.Frame(main, style="Card.TFrame")
-        row.pack(fill="x")
+        # 本机 sshd 是全局的，不属于任何一台服务器，放顶栏
         self.dots, self.vals = {}, {}
-        for key, title in (("sshd", "本机 SSH 服务"), ("tunnel", "隧道"), ("server", "服务器")):
-            cell = ttk.Frame(row, style="Card.TFrame")
-            cell.pack(side="left", padx=(0, int(pad * 2.2)))
-            ttk.Label(cell, text=title, style="Sub.TLabel").pack(anchor="w")
-            line = ttk.Frame(cell, style="Card.TFrame")
-            line.pack(anchor="w", pady=(2, 0))
-            d = tk.Label(line, text="●", fg=C_NA, bg=C_CARD, font=(fam, fs))
-            d.pack(side="left")
-            v = ttk.Label(line, text="—", style="TLabel")
-            v.pack(side="left", padx=(5, 0))
-            self.dots[key], self.vals[key] = d, v
+        sshd_box = ttk.Frame(top)
+        sshd_box.pack(side="right", padx=(0, int(pad * 1.6)))
+        d = tk.Label(sshd_box, text="●", fg=C_NA, bg=C_BG, font=(fam, fs))
+        d.pack(side="left")
+        ttk.Label(sshd_box, text="本机 SSH", style="SubBg.TLabel").pack(side="left", padx=(4, 5))
+        v = ttk.Label(sshd_box, text="—", style="Bg.TLabel")
+        v.pack(side="left")
+        self.dots["sshd"], self.vals["sshd"] = d, v
 
-        self.lbl_mode = ttk.Label(main, text="", style="Sub.TLabel")
-        self.lbl_mode.pack(anchor="w", pady=(int(pad * 0.6), 0))
+        # ═══════════ 主体：左服务器 · 右挂载与日志 ═══════════
+        sidew = int(fs * 25)
+        body = ttk.Frame(outer)
+        body.pack(fill="both", expand=True)
+        body.columnconfigure(0, weight=0, minsize=sidew)
+        body.columnconfigure(1, weight=1)
+        body.rowconfigure(0, weight=1)
 
-        # ═══════════ 挂载目录 ═══════════
-        box2, mbox = card(outer)
-        box2.pack(fill="both", expand=True, pady=(0, pad))
+        self.btns = {}
+
+        # ---------- 左栏 ----------
+        left_box, left = card(body, padding=(int(pad * 0.7), int(pad * 0.7)))
+        left_box.grid(row=0, column=0, sticky="nsew", padx=(0, pad))
+        left_box.configure(width=sidew)
+        # 里面的子控件是 pack 布局的，必须 pack_propagate ——
+        # grid_propagate 对它们无效，侧栏会撑到内容那么宽，把右边挤没
+        left_box.pack_propagate(False)
+
+        lh = ttk.Frame(left, style="Card.TFrame")
+        lh.pack(fill="x", pady=(0, int(pad * 0.5)))
+        ttk.Label(lh, text="服务器", style="Big.TLabel").pack(side="left")
+        b = flat_btn(lh, "＋ 添加", self.act_add_server, bg=C_CARD, padx=4, pady=2)
+        b.pack(side="right")
+        self.btns["s_add"] = b
+
+        # 服务器多了要能滚，所以套一层 canvas
+        wrap = tk.Frame(left, bg=C_CARD, highlightthickness=0)
+        wrap.pack(fill="both", expand=True)
+        self.srv_canvas = tk.Canvas(wrap, bg=C_CARD, highlightthickness=0, bd=0)
+        self.srv_sc = ttk.Scrollbar(wrap, orient="vertical", command=self.srv_canvas.yview)
+        self.srv_canvas.configure(yscrollcommand=self._srv_scroll_set)
+        self.srv_canvas.pack(side="left", fill="both", expand=True)
+        self.srv_host = ttk.Frame(self.srv_canvas, style="Card.TFrame")
+        self._srv_win = self.srv_canvas.create_window((0, 0), window=self.srv_host, anchor="nw")
+        self.srv_host.bind("<Configure>", lambda _e: self.srv_canvas.configure(
+            scrollregion=self.srv_canvas.bbox("all")))
+        self.srv_canvas.bind("<Configure>", lambda e: self.srv_canvas.itemconfigure(
+            self._srv_win, width=e.width))
+        for w in (self.srv_canvas, self.srv_host):
+            w.bind("<MouseWheel>", self._srv_wheel)          # Windows / macOS
+            w.bind("<Button-4>", self._srv_wheel)            # X11 上滚
+            w.bind("<Button-5>", self._srv_wheel)
+
+        self.srv_rows = {}          # sid -> 该行的控件引用
+        self.expanded = set()       # 展开了详情的 sid
+        self.sel_sid = CFG.get("active")
+        self.dyn_btns = []          # 服务器行里动态生成的按钮，也要跟着忙碌态禁用
+
+        # ---------- 右栏 ----------
+        right = ttk.Frame(body)
+        right.grid(row=0, column=1, sticky="nsew")
+        right.columnconfigure(0, weight=1)
+        right.rowconfigure(0, weight=1)
+
+        box2, mbox = card(right)
+        box2.grid(row=0, column=0, sticky="nsew")
 
         mh = ttk.Frame(mbox, style="Card.TFrame")
         mh.pack(fill="x", pady=(0, int(pad * 0.6)))
         ttk.Label(mh, text="挂载目录", style="Big.TLabel").pack(side="left")
-        self.btns = {}
+        self.lbl_mount_of = ttk.Label(mh, text="", style="Sub.TLabel")
+        self.lbl_mount_of.pack(side="left", padx=(10, 0))
         for key, text, cmd in (("del", "移除", self.act_del_mount),
                                ("edit", "更改位置…", self.act_edit_mount),
                                ("tog", "挂载/卸载", self.act_toggle),
                                ("add", "添加文件夹…", self.act_add_mount)):
-            b = ttk.Button(mh, text=text, command=cmd)
+            b = ttk.Button(mh, text=text, command=cmd,
+                           style="Accent.TButton" if key == "add" else "Tool.TButton")
             b.pack(side="right", padx=(6, 0))
             self.btns[key] = b
 
         self.tree = ttk.Treeview(mbox, columns=("local", "mount", "state"),
                                  show="headings", height=6, selectmode="browse")
-        cw = int(fs * 26)
+        cw = int(fs * 17)
         for c, t, wd, anc in (("local", "本机文件夹", cw, "w"),
                               ("mount", "服务器挂载点", cw, "w"),
-                              ("state", "状态", int(cw * 0.3), "center")):
-            self.tree.heading(c, text=t)
-            self.tree.column(c, width=wd, anchor=anc)
+                              ("state", "状态", int(cw * 0.34), "center")):
+            self.tree.heading(c, text=t, anchor=anc)
+            self.tree.column(c, width=wd, anchor=anc, stretch=True)
         self.tree.tag_configure("on", foreground=C_OK)
         self.tree.tag_configure("off", foreground=C_NA)
         self.tree.pack(fill="both", expand=True)
         self.tree.bind("<Double-1>", lambda _e: self.act_toggle())
-        ttk.Label(mbox, text="双击一行可切换挂载状态", style="Sub.TLabel").pack(anchor="w", pady=(6, 0))
+        ttk.Label(mbox, text="双击一行可切换挂载状态",
+                  style="Sub.TLabel").pack(anchor="w", pady=(6, 0))
 
-        # ═══════════ 折叠区：服务器管理 + 日志 ═══════════
-        self.adv_open = tk.BooleanVar(value=False)
-        bar = ttk.Frame(outer)
-        bar.pack(fill="x")
-        self.btn_adv = tk.Button(bar, text="▸ 更多（服务器管理 · 运行日志）",
-                                 command=self._toggle_adv, relief="flat", bd=0,
-                                 bg=C_BG, fg=C_MUTED, activebackground=C_BG,
-                                 activeforeground=C_ACCENT, cursor="hand2",
-                                 font=self.f_sub, padx=0, pady=4, anchor="w")
-        self.btn_adv.pack(side="left")
-        self.lbl_status = ttk.Label(bar, text="", style="SubBg.TLabel")
+        # ---------- 右栏下半：运行日志（可折叠） ----------
+        self.log_open = tk.BooleanVar(value=bool(CFG.get("log_open", True)))
+        logbar = ttk.Frame(right)
+        logbar.grid(row=1, column=0, sticky="ew", pady=(int(pad * 0.5), 0))
+        self.btn_log = flat_btn(logbar, "", self._toggle_log, padx=0, pady=2, anchor="w")
+        self.btn_log.pack(side="left")
+        self.lbl_status = ttk.Label(logbar, text="", style="SubBg.TLabel")
         self.lbl_status.pack(side="right")
 
-        self.adv = ttk.Frame(outer)      # 默认不 pack
-
-        box3, sbox = card(self.adv)
-        box3.pack(fill="x", pady=(int(pad * 0.6), int(pad * 0.6)))
-        sh = ttk.Frame(sbox, style="Card.TFrame")
-        sh.pack(fill="x", pady=(0, int(pad * 0.5)))
-        ttk.Label(sh, text="服务器", style="Big.TLabel").pack(side="left")
-        for key, text, cmd in (("s_del", "删除", self.act_del_server),
-                               ("s_edit", "编辑", self.act_edit_server),
-                               ("s_add", "添加服务器…", self.act_add_server)):
-            b = ttk.Button(sh, text=text, command=cmd)
-            b.pack(side="right", padx=(6, 0))
-            self.btns[key] = b
-
-        self.tree_srv = ttk.Treeview(
-            sbox, columns=("name", "alias", "tunnel", "keep", "mounts"),
-            show="headings", height=3, selectmode="browse")
-        for c, t, wd in (("name", "名称", int(fs * 14)), ("alias", "SSH 别名", int(fs * 13)),
-                         ("tunnel", "隧道", int(fs * 12)), ("keep", "保活", int(fs * 5)),
-                         ("mounts", "挂载", int(fs * 5))):
-            self.tree_srv.heading(c, text=t)
-            self.tree_srv.column(c, width=wd, anchor="w")
-        self.tree_srv.tag_configure("on", foreground=C_OK)
-        self.tree_srv.tag_configure("off", foreground=C_NA)
-        self.tree_srv.pack(fill="x")
-        self.tree_srv.bind("<<TreeviewSelect>>", lambda _e: self._refresh_mounts())
-
-        tb = ttk.Frame(sbox, style="Card.TFrame")
-        tb.pack(fill="x", pady=(int(pad * 0.5), 0))
-        for key, text, cmd in (("t_start", "启动隧道", self.act_tunnel_start),
-                               ("t_stop", "停止", self.act_tunnel_stop),
-                               ("t_re", "重连", self.act_tunnel_restart),
-                               ("ref", "刷新", self.act_refresh)):
-            b = ttk.Button(tb, text=text, command=cmd)
-            b.pack(side="left", padx=(0, 6))
-            self.btns[key] = b
-
-        box4, lbox = card(self.adv, padding=(int(pad * 0.6), int(pad * 0.5)))
-        box4.pack(fill="both", expand=True)
-        ttk.Label(lbox, text="运行日志", style="Sub.TLabel").pack(anchor="w", pady=(0, 4))
-        wrap = ttk.Frame(lbox, style="Card.TFrame")
-        wrap.pack(fill="both", expand=True)
-        self.txt = tk.Text(wrap, height=9, wrap="none", font=self.f_mono, bg=C_CARD,
+        self.logbox, lbox = card(right, padding=(int(pad * 0.6), int(pad * 0.5)))
+        lwrap = ttk.Frame(lbox, style="Card.TFrame")
+        lwrap.pack(fill="both", expand=True)
+        self.txt = tk.Text(lwrap, height=8, wrap="none", font=self.f_mono, bg=C_CARD,
                            fg=C_TEXT, relief="flat", bd=0, state="disabled",
-                           highlightthickness=0)
-        sc = ttk.Scrollbar(wrap, orient="vertical", command=self.txt.yview)
+                           highlightthickness=0, insertbackground=C_TEXT)
+        sc = ttk.Scrollbar(lwrap, orient="vertical", command=self.txt.yview)
         self.txt.configure(yscrollcommand=sc.set)
         sc.pack(side="right", fill="y")
         self.txt.pack(side="left", fill="both", expand=True)
         self.txt.tag_configure("ts", foreground=C_NA)
         self.txt.tag_configure("warn", foreground=C_WARN)
         self.txt.tag_configure("error", foreground=C_BAD)
+        self._apply_log_vis()
 
-    def _toggle_adv(self):
-        if self.adv_open.get():
-            self.adv.pack_forget()
-            self.btn_adv.configure(text="▸ 更多（服务器管理 · 运行日志）")
-            self.adv_open.set(False)
+        self._rebuild_server_list()
+
+    # ------------------------------------------------------------ 左栏：服务器
+
+    def _srv_scroll_set(self, lo, hi):
+        """内容装得下就把滚动条收起来 —— 侧栏本来就窄，别白占 15 像素"""
+        self.srv_sc.set(lo, hi)
+        if float(lo) <= 0.0 and float(hi) >= 1.0:
+            self.srv_sc.pack_forget()
+        elif not self.srv_sc.winfo_ismapped():
+            self.srv_sc.pack(side="right", fill="y", before=self.srv_canvas)
+
+    def _srv_wheel(self, e):
+        step = -1 if getattr(e, "num", 0) == 4 or getattr(e, "delta", 0) > 0 else 1
+        self.srv_canvas.yview_scroll(step, "units")
+
+    def _rebuild_server_list(self):
+        """重建整个列表。只在服务器增删改名时调用 —— 每秒刷新只改文字，
+        否则鼠标悬停和点击会被不断重建的控件吃掉。"""
+        for w in self.srv_host.winfo_children():
+            w.destroy()
+        self.srv_rows.clear()
+        self.dyn_btns = [b for b in self.dyn_btns if False]
+
+        if not self.servers:
+            ttk.Label(self.srv_host, text="还没有服务器\n点右上角「＋ 添加」",
+                      style="Sub.TLabel", justify="left").pack(anchor="w", pady=8)
+            return
+
+        if self.sel_sid not in [s.sid for s in self.servers]:
+            self.sel_sid = self.servers[0].sid
+
+        fs = int(CFG.get("font_size", 11))
+        for srv in self.servers:
+            self.srv_rows[srv.sid] = self._build_srv_row(self.srv_host, srv, fs)
+        self._paint_selection()
+
+    def _build_srv_row(self, parent, srv, fs):
+        sel = srv.sid == self.sel_sid
+        bg = C_SEL if sel else C_CARD
+
+        shell = tk.Frame(parent, bg=bg, highlightthickness=0)
+        shell.pack(fill="x", pady=(0, 4))
+        # 左侧一道竖条标出当前选中的服务器，比只换底色好认
+        strip = tk.Frame(shell, bg=C_ACCENT if sel else bg, width=3)
+        strip.pack(side="left", fill="y")
+        inner = tk.Frame(shell, bg=bg)
+        inner.pack(side="left", fill="both", expand=True)
+
+        head = tk.Frame(inner, bg=bg, cursor="hand2")
+        head.pack(fill="x", padx=8, pady=5)
+
+        # 按钮和箭头先占位，名字最后才 expand —— 反过来的话长名字会把按钮挤没
+        dot = tk.Label(head, text="●", fg=C_NA, bg=bg, font=(self.f_base[0], fs))
+        dot.pack(side="left")
+        caret = tk.Label(head, text="▸", bg=bg, fg=C_MUTED, font=self.f_sub, cursor="hand2")
+        caret.pack(side="right", padx=(6, 0))
+        conn = tk.Button(head, text="连接", relief="flat", bd=0, cursor="hand2",
+                         bg=C_ACCENT, fg="#ffffff", activebackground=C_ACCENT_H,
+                         activeforeground="#ffffff", font=self.f_sub,
+                         padx=10, pady=3, highlightthickness=0,
+                         command=lambda s=srv: self._srv_act(s, self.act_primary))
+        conn.pack(side="right")
+        self.dyn_btns.append(conn)
+
+        namebox = tk.Frame(head, bg=bg)
+        namebox.pack(side="left", fill="x", expand=True, padx=(5, 8))
+        # width=1 让标签不按文字长度索要宽度，长名字会被裁掉而不是撑破整行
+        name = tk.Label(namebox, text=srv.label, bg=bg, fg=C_TEXT,
+                        font=self.f_bold, anchor="w", width=1)
+        name.pack(fill="x")
+        sub = tk.Label(namebox, text="", bg=bg, fg=C_MUTED, font=self.f_sub,
+                       anchor="w", width=1)
+        sub.pack(fill="x")
+
+        # 点行选中，点箭头展开/收起 —— 两件事分开，免得选个服务器还得看见一堆细节
+        for w in (inner, head, namebox, name, sub, dot):
+            w.bind("<Button-1>", lambda _e, s=srv: self._select_srv(s.sid))
+        caret.bind("<Button-1>", lambda _e, s=srv: self._toggle_expand(s.sid))
+
+        detail = tk.Frame(inner, bg=C_CARD2)
+        rows = {}
+        for key, title in (("tunnel", "隧道"), ("server", "服务器"), ("pipe", "状态")):
+            line = tk.Frame(detail, bg=C_CARD2)
+            line.pack(fill="x", padx=10, pady=(4, 0))
+            tk.Label(line, text=title, bg=C_CARD2, fg=C_MUTED, font=self.f_sub,
+                     width=5, anchor="w").pack(side="left")
+            val = tk.Label(line, text="—", bg=C_CARD2, fg=C_TEXT,
+                           font=self.f_sub, anchor="w", justify="left")
+            val.pack(side="left", fill="x", expand=True)
+            rows[key] = val
+
+        acts = tk.Frame(detail, bg=C_CARD2)
+        acts.pack(fill="x", padx=8, pady=(8, 8))
+        for text, cmd in (("重连", lambda s=srv: self._srv_act(s, self.act_tunnel_restart)),
+                          ("编辑", lambda s=srv: self._srv_act(s, self.act_edit_server)),
+                          ("删除", lambda s=srv: self._srv_act(s, self.act_del_server))):
+            b = self.flat_btn(acts, text, cmd, bg=C_CARD2, padx=6, pady=2)
+            b.pack(side="left", padx=(0, 8))
+            self.dyn_btns.append(b)
+
+        if srv.sid in self.expanded:
+            detail.pack(fill="x")
+            caret.configure(text="▾")
+
+        return {"shell": shell, "inner": inner, "strip": strip, "head": head,
+                "namebox": namebox, "name": name, "sub": sub, "dot": dot,
+                "caret": caret, "detail": detail, "rows": rows,
+                "conn": conn, "acts": acts}
+
+    def _srv_act(self, srv, fn):
+        """行内按钮先把该服务器选中，再执行动作 —— 动作都作用于 current()"""
+        self._select_srv(srv.sid)
+        fn()
+
+    def _select_srv(self, sid):
+        if sid == self.sel_sid:
+            return
+        self.sel_sid = sid
+        self._paint_selection()
+        self._refresh_mounts()
+        self._persist()
+
+    def _paint_selection(self):
+        for sid, w in self.srv_rows.items():
+            on = sid == self.sel_sid
+            bg = C_SEL if on else C_CARD
+            for k in ("shell", "inner", "head", "namebox", "name", "sub", "dot", "caret"):
+                w[k].configure(bg=bg)
+            w["strip"].configure(bg=C_ACCENT if on else bg)
+
+    def _toggle_expand(self, sid):
+        w = self.srv_rows.get(sid)
+        if not w:
+            return
+        if sid in self.expanded:
+            self.expanded.discard(sid)
+            w["detail"].pack_forget()
+            w["caret"].configure(text="▸")
         else:
-            self.adv.pack(fill="both", expand=True)
-            self.btn_adv.configure(text="▾ 收起")
-            self.adv_open.set(True)
+            self.expanded.add(sid)
+            w["detail"].pack(fill="x")
+            w["caret"].configure(text="▾")
+
+    # ------------------------------------------------------------ 日志折叠
+
+    def _apply_log_vis(self):
+        if self.log_open.get():
+            self.logbox.grid(row=2, column=0, sticky="nsew", pady=(4, 0))
+            self.btn_log.configure(text="▾ 运行日志")
+        else:
+            self.logbox.grid_forget()
+            self.btn_log.configure(text="▸ 运行日志")
+
+    def act_theme(self):
+        """ttk 样式是建界面时一次性配好的，换主题最干净的办法是就地重启"""
+        CFG["theme"] = "light" if THEME == "dark" else "dark"
+        save_cfg(CFG)
+        self.log(f"切换到{'浅色' if CFG['theme'] == 'light' else '深色'}主题，重启界面…")
+        self._restart_self()
+
+    def _toggle_log(self):
+        self.log_open.set(not self.log_open.get())
+        CFG["log_open"] = self.log_open.get()
+        save_cfg(CFG)
+        self._apply_log_vis()
 
     def act_primary(self):
         """主按钮：按当前状态决定是连接还是断开"""
@@ -1474,8 +1688,11 @@ class BridgeApp:
 
     def _set_busy(self, busy):
         self.busy = busy
-        for b in self.btns.values():
-            b.configure(state="disabled" if busy else "normal")
+        for b in list(self.btns.values()) + list(self.dyn_btns):
+            try:
+                b.configure(state="disabled" if busy else "normal")
+            except tk.TclError:
+                pass            # 行重建后旧按钮已销毁，忽略
         self.root.configure(cursor="watch" if busy else "")
 
     def _work(self, fn):
@@ -1939,26 +2156,55 @@ class BridgeApp:
     # ------------------------------------------------------------ 刷新
 
     def _refresh_servers(self):
-        keep = None
-        sel = self.tree_srv.selection()
-        if sel:
-            keep = self.tree_srv.item(sel[0], "values")[0]   # 现在第一列是名称
-        self.tree_srv.delete(*self.tree_srv.get_children())
+        """每秒刷新：只改已有控件的文字和颜色。服务器集合变了才整体重建。"""
+        if set(self.srv_rows) != {s.sid for s in self.servers}:
+            self._rebuild_server_list()
+
         for srv in self.servers:
-            t, st = srv.state["tunnel"], srv.state["server"]
-            self.tree_srv.insert("", "end", values=(
-                srv.label, srv.alias, t.get("text", "—"),
-                "开" if srv.conf.get("auto_tunnel") else "关",
-                len(srv.user_mounts)),
-                tags=("on" if t.get("ok") else "off",))
-        kids = self.tree_srv.get_children()
-        if keep:
-            for iid in kids:
-                if self.tree_srv.item(iid, "values")[0] == keep:
-                    self.tree_srv.selection_set(iid)
-                    return
-        if kids:
-            self.tree_srv.selection_set(kids[0])
+            w = self.srv_rows.get(srv.sid)
+            if not w:
+                continue
+            t, s = srv.state["tunnel"], srv.state["server"]
+            ok = bool(t.get("ok"))
+            w["dot"].configure(fg=C_OK if ok else (C_NA if t.get("ok") is None else C_BAD))
+            if w["name"].cget("text") != srv.label:
+                w["name"].configure(text=srv.label)
+
+            bits = [srv.alias]
+            if srv.port:
+                bits.append(f":{srv.port}")
+            n = len(srv.user_mounts)
+            bits.append(f"· {n} 个挂载" if n else "· 未挂载")
+            w["sub"].configure(text=" ".join(bits))
+
+            if self.busy:
+                w["conn"].configure(text="…", bg=C_NA, state="disabled")
+            elif ok:
+                w["conn"].configure(text="断开", bg=C_CARD2, fg=C_TEXT,
+                                    activebackground=C_LINE, state="normal")
+            else:
+                w["conn"].configure(text="连接", bg=C_ACCENT, fg="#ffffff",
+                                    activebackground=C_ACCENT_H, state="normal")
+
+            if srv.sid in self.expanded:
+                w["rows"]["tunnel"].configure(
+                    text=t.get("text", "—"),
+                    fg=C_OK if ok else (C_MUTED if t.get("ok") is None else C_BAD))
+                w["rows"]["server"].configure(
+                    text=s.get("text", "—"),
+                    fg=C_OK if s.get("ok") else (C_MUTED if s.get("ok") is None else C_BAD))
+                src, fresh = srv.state.get("source"), srv.state.get("fresh_s")
+                if src == "local" and fresh is not None:
+                    txt, col = f"实时同步 · {fresh:.0f}s 前", C_MUTED
+                elif src == "ssh":
+                    txt, col = "SSH 探测（管道未就绪）", C_WARN
+                elif src == "stale":
+                    txt, col = "等待状态…", C_WARN
+                else:
+                    txt, col = "—", C_MUTED
+                if not srv.status_mounted and srv.port_ok:
+                    txt, col = txt + " · 管道未挂载", C_WARN
+                w["rows"]["pipe"].configure(text=txt, fg=col)
 
     def _refresh_mounts(self):
         srv = self.current()
@@ -1987,52 +2233,17 @@ class BridgeApp:
     def _refresh_ui(self):
         srv = self.current()
 
-        # ---- 三个状态指示
-        states = {"sshd": self.sshd}
+        v = self.sshd
+        self.dots["sshd"].configure(
+            fg=C_OK if v.get("ok") else (C_NA if v.get("ok") is None else C_BAD))
+        self.vals["sshd"].configure(text=v.get("text", "—"))
+
         if srv:
-            states["tunnel"] = srv.state["tunnel"]
-            states["server"] = srv.state["server"]
-        else:
-            states["tunnel"] = {"ok": None, "text": "—"}
-            states["server"] = {"ok": None, "text": "—"}
-        for k, v in states.items():
-            col = C_OK if v.get("ok") else (C_NA if v.get("ok") is None else C_BAD)
-            self.dots[k].configure(fg=col)
-            self.vals[k].configure(text=v.get("text", "—"))
-
-        # ---- 主卡片标题与主按钮
-        if srv:
-            self.lbl_srv.configure(text=srv.label)
-            bits = [srv.alias]
-            if srv.conf.get("host"):
-                bits.append(srv.conf["host"])
-            if srv.port:
-                bits.append(f"端口 {srv.port}")
-            self.lbl_srv_sub.configure(text="  ·  ".join(bits))
-
-            connected = bool(srv.state["tunnel"].get("ok"))
-            if self.busy:
-                self.btn_primary.configure(text="处理中…", bg=C_NA, state="disabled")
-            elif connected:
-                self.btn_primary.configure(text="断开", bg=C_MUTED, state="normal",
-                                           activebackground="#4b5565")
-            else:
-                self.btn_primary.configure(text="连接", bg=C_ACCENT, state="normal",
-                                           activebackground="#1249ab")
-
-            src, fresh = srv.state.get("source"), srv.state.get("fresh_s")
-            mode = (f"状态实时同步 · {fresh:.0f}s 前" if src == "local" and fresh is not None
-                    else "SSH 直连探测（状态管道未就绪）" if src == "ssh"
-                    else "等待状态…" if src == "stale" else "")
-            pipe = "" if srv.status_mounted else "   ·   状态管道未挂载"
-            self.lbl_mode.configure(text=(mode + pipe) if mode else "")
+            self.lbl_mount_of.configure(text=f"· {srv.label}")
             up = srv.state.get("uptime")
             self.lbl_status.configure(text=f"服务器已运行 {up}" if up else "")
         else:
-            self.lbl_srv.configure(text="尚未配置服务器")
-            self.lbl_srv_sub.configure(text="点右侧按钮开始")
-            self.btn_primary.configure(text="添加服务器", bg=C_ACCENT, state="normal")
-            self.lbl_mode.configure(text="")
+            self.lbl_mount_of.configure(text="")
             self.lbl_status.configure(text="")
 
         if self.update_ready:
