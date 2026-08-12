@@ -27,6 +27,13 @@ param(
 
 $ErrorActionPreference = "Stop"
 function Say($m) { Write-Output $m }
+
+# Common mistake: passing the public key as -Identity
+if ($Identity -and $Identity.EndsWith(".pub")) {
+    Write-Output "[!] -Identity should be the PRIVATE key path, you gave a public key: $Identity"
+    Write-Output ("    Drop the trailing .pub, e.g. " + $Identity.Substring(0, $Identity.Length - 4))
+    exit 1
+}
 function Warn($m) { Write-Output ("  ! " + $m) }
 
 # ---- must be admin

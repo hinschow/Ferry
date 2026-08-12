@@ -733,15 +733,27 @@ cat <<TIPEOF
 $(cat /root/.ssh/id_bridge.pub)
 
 
-【Windows】管理员 PowerShell，在 bridge-console 目录里执行（一整行）：
+【第 1 步】在【你的本地电脑】上取得客户端文件（不是在这台服务器上）：
+
+  git clone <本项目仓库地址> ~/bridge-console
+  cd ~/bridge-console
+
+  # 或者把 setup-windows.ps1 / setup-mac.sh / bridge_gui.py 三个文件拷过去也行
+
+【第 2 步】配置本机（下面命令都是一整行）
+
+  Windows —— 管理员 PowerShell：
 
   powershell -ExecutionPolicy Bypass -File setup-windows.ps1 -PubKey "上面那行公钥" -ServerHost $SRV -Alias $HOSTN -Identity ~/.ssh/你连本服务器用的私钥 -LoopbackOnly -AutoStart
 
-【macOS】先开「系统设置 → 通用 → 共享 → 远程登录」，然后（一整行）：
+  macOS —— 先开「系统设置 → 通用 → 共享 → 远程登录」，然后终端执行：
 
   bash setup-mac.sh --pubkey "上面那行公钥" --host $SRV --alias $HOSTN --identity ~/.ssh/你连本服务器用的私钥 --autostart
 
-【然后】打开桌面客户端 → 「添加服务器…」→ SSH 别名填 $HOSTN → 「启动隧道」
+  注意 --identity / -Identity 要填【私钥】路径（不带 .pub）；
+  若你本来就能直接 ssh 上这台服务器，这个参数可以整个省略。
+
+【第 3 步】打开桌面客户端 → 「添加服务器…」→ SSH 别名填 $HOSTN → 「启动隧道」
 
   客户端会自动把本机的用户名、系统、工具路径上报给服务器，
   并领取一个不冲突的隧道端口。服务器这边无需任何手工配置。

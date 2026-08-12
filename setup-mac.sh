@@ -24,6 +24,14 @@ while [ $# -gt 0 ]; do
 done
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# 常见笔误：把公钥当私钥传进来
+case "$IDENTITY" in
+  *.pub)
+    echo "[!] --identity 应该填【私钥】路径，你给的是公钥：$IDENTITY"
+    echo "    去掉结尾的 .pub 再试，例如 ${IDENTITY%.pub}"
+    exit 1 ;;
+esac
+
 echo "[1/7] Remote Login (sshd)"
 if systemsetup -getremotelogin 2>/dev/null | grep -qi "On"; then
   echo "      already on"
