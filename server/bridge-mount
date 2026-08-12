@@ -13,7 +13,7 @@ mountpoint -q "$MP" && { echo "ALREADY|$MP"; exit 0; }
 mkdir -p "$MP" || { echo "ERR|无法创建挂载点 $MP"; exit 1; }
 
 ERR=$(sshfs -p "$PORT" "$USER@127.0.0.1:$SFTP_PATH" "$MP" \
-  -o IdentityFile=/root/.ssh/id_win,reconnect,ServerAliveInterval=15,ServerAliveCountMax=3 \
+  -o IdentityFile=/root/.ssh/id_bridge,reconnect,ServerAliveInterval=15,ServerAliveCountMax=3 \
   -o compression=yes,max_conns=4 \
   -o cache=yes,kernel_cache,cache_timeout=60 \
   -o attr_timeout=15,entry_timeout=15,negative_timeout=5 \

@@ -32,12 +32,17 @@ CFGEOF
 echo "    /root/.winbridge/config（客户端档案将由 bridge-register 自动创建）"
 
 echo "==> 3/5 生成专用密钥"
-if [ -f /root/.ssh/id_win ]; then
+if [ -f /root/.ssh/id_bridge ]; then
   echo "    已存在，跳过"
+elif [ -f /root/.ssh/id_win ]; then
+  # 兼容早期版本：沿用已有密钥，建软链统一入口
+  ln -sf /root/.ssh/id_win /root/.ssh/id_bridge
+  ln -sf /root/.ssh/id_win.pub /root/.ssh/id_bridge.pub
+  echo "    沿用已有密钥 /root/.ssh/id_win"
 else
   mkdir -p /root/.ssh && chmod 700 /root/.ssh
-  ssh-keygen -t ed25519 -f /root/.ssh/id_win -N '' -C "remote-to-windows-sshfs-$(hostname)" -q
-  echo "    已生成 /root/.ssh/id_win"
+  ssh-keygen -t ed25519 -f /root/.ssh/id_bridge -N '' -C "bridge@$(hostname)" -q
+  echo "    已生成 /root/.ssh/id_bridge"
 fi
 
 cat > /root/.winbridge/index-exclude.txt <<'EXCEOF'
@@ -107,7 +112,7 @@ bridge_resolve_client "$@" || exit 1
 WD=""; if [ "$1" = "-d" ]; then WD="$2"; shift 2; fi
 [ -z "$1" ] && { echo "用法: bridge-run [-c 客户端] [-d 目录] \"命令\""; exit 1; }
 
-SSH_OPTS=(-i /root/.ssh/id_win -p "$PORT"
+SSH_OPTS=(-i /root/.ssh/id_bridge -p "$PORT"
   -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
   -o LogLevel=ERROR -o ConnectTimeout=15
   -o ControlMaster=auto -o ControlPath="/root/.winbridge/cm-${CLIENT}-%C" -o ControlPersist=60m)
@@ -142,7 +147,7 @@ mountpoint -q "$MP" && { echo "ALREADY|$MP"; exit 0; }
 mkdir -p "$MP" || { echo "ERR|无法创建挂载点 $MP"; exit 1; }
 
 ERR=$(sshfs -p "$PORT" "$USER@127.0.0.1:$SFTP_PATH" "$MP" \
-  -o IdentityFile=/root/.ssh/id_win,reconnect,ServerAliveInterval=15,ServerAliveCountMax=3 \
+  -o IdentityFile=/root/.ssh/id_bridge,reconnect,ServerAliveInterval=15,ServerAliveCountMax=3 \
   -o compression=yes,max_conns=4 \
   -o cache=yes,kernel_cache,cache_timeout=60 \
   -o attr_timeout=15,entry_timeout=15,negative_timeout=5 \
@@ -482,7 +487,7 @@ STATUS_LOCAL='$SLOCAL'
 CFGEOF
 mkdir -p "/root/.winbridge/status/$NAME" "/root/mnt/$NAME"
 
-PUB=$(cat /root/.ssh/id_win.pub 2>/dev/null)
+PUB=$(cat /root/.ssh/id_bridge.pub 2>/dev/null)
 SRV=$(curl -s -m 5 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
 cat <<TIPEOF
 
@@ -714,7 +719,7 @@ for p in win-run:bridge-run win-check:bridge-check win-mounts:bridge-mounts win-
   ln -sfn "/usr/local/bin/${p##*:}" "/usr/local/bin/${p%%:*}"; done
 echo "    bridge-run bridge-mount bridge-umount bridge-mounts bridge-check bridge-grep bridge-git bridge-statusd bridge-daemon（含 win-* 兼容软链）"
 echo "==> 5/5 完成"
-SRV_IP=$(curl -s -m 5 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
+SRV=$(curl -s -m 5 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
 HOSTN=$(hostname)
 
 cat <<TIPEOF
@@ -725,22 +730,16 @@ cat <<TIPEOF
 
 本服务器的公钥（下一步要用）：
 
-$(cat /root/.ssh/id_win.pub)
+$(cat /root/.ssh/id_bridge.pub)
 
 
-【Windows】管理员 PowerShell，在 bridge-console 目录里：
+【Windows】管理员 PowerShell，在 bridge-console 目录里执行（一整行）：
 
-  powershell -ExecutionPolicy Bypass -File setup-windows.ps1 \\
-    -PubKey "上面那行公钥" \\
-    -ServerHost $SRV -Alias $HOSTN \\
-    -Identity ~/.ssh/你连本服务器用的私钥 \\
-    -LoopbackOnly -AutoStart
+  powershell -ExecutionPolicy Bypass -File setup-windows.ps1 -PubKey "上面那行公钥" -ServerHost $SRV -Alias $HOSTN -Identity ~/.ssh/你连本服务器用的私钥 -LoopbackOnly -AutoStart
 
-【macOS】先开「系统设置 → 通用 → 共享 → 远程登录」，然后：
+【macOS】先开「系统设置 → 通用 → 共享 → 远程登录」，然后（一整行）：
 
-  bash setup-mac.sh --pubkey "上面那行公钥" \\
-    --host $SRV --alias $HOSTN \\
-    --identity ~/.ssh/你连本服务器用的私钥 --autostart
+  bash setup-mac.sh --pubkey "上面那行公钥" --host $SRV --alias $HOSTN --identity ~/.ssh/你连本服务器用的私钥 --autostart
 
 【然后】打开桌面客户端 → 「添加服务器…」→ SSH 别名填 $HOSTN → 「启动隧道」
 

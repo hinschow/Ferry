@@ -6,7 +6,7 @@ bridge_resolve_client "$@" || exit 1
 WD=""; if [ "$1" = "-d" ]; then WD="$2"; shift 2; fi
 [ -z "$1" ] && { echo "用法: bridge-run [-c 客户端] [-d 目录] \"命令\""; exit 1; }
 
-SSH_OPTS=(-i /root/.ssh/id_win -p "$PORT"
+SSH_OPTS=(-i /root/.ssh/id_bridge -p "$PORT"
   -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
   -o LogLevel=ERROR -o ConnectTimeout=15
   -o ControlMaster=auto -o ControlPath="/root/.winbridge/cm-${CLIENT}-%C" -o ControlPersist=60m)
