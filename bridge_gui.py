@@ -380,12 +380,74 @@ class Server:
             self.log(f"[{self.label}] 隧道进程退出 (code {code})", "warn")
             for line in detail:
                 self.log(f"    {line}", "error")
+            blob = " ".join(detail)
+            for prefix, why in self.FAKE_IP_HINTS:
+                if prefix in blob:
+                    self.log(f"    ⚠️ 出现 {prefix}x 段地址：{why}", "error")
+                    self.log("       → 代理劫持了这条连接，放行该地址或关掉 TUN 模式", "error")
+                    break
             if code == 255 and not detail:
                 self.log("    SSH 通用错误。终端手动跑一次看详情： "
                          f"ssh -N -v {self.alias}", "warn")
         if self.port_ok:
             return {"ok": True, "text": "已连接（外部）", "owner": "external"}
         return {"ok": False, "text": "未连接", "owner": None}
+
+    FAKE_IP_HINTS = (
+        ("198.18.", "RFC2544 测试网段 —— 几乎可以确定是代理/VPN 的 fake-IP 模式"),
+        ("198.19.", "RFC2544 测试网段 —— 代理 fake-IP"),
+        ("240.", "保留网段 —— 部分代理用它做 fake-IP"),
+        ("100.64.", "CGNAT 网段 —— Tailscale/运营商 NAT，或代理"),
+    )
+
+    def diagnose(self, extra=""):
+        """连接失败时把「实际生效的配置」打出来 —— 别名解析到哪、用哪把钥匙、
+        以及目标 IP 是否被代理劫持。用户最常见的坑就是这两类。"""
+        self.log(f"[{self.label}] ── 连接诊断 ──", "warn")
+
+        rc, out = run(["ssh", "-G", self.alias], 15)
+        cfg = {}
+        for line in out.splitlines():
+            k, _, v = line.strip().partition(" ")
+            if k and k not in cfg:
+                cfg[k] = v
+        if rc != 0 or not cfg:
+            self.log(f"    ssh -G {self.alias} 失败：别名可能不存在于 ~/.ssh/config", "error")
+            return
+
+        host = cfg.get("hostname", "?")
+        self.log(f"    别名 {self.alias} → {cfg.get('user','?')}@{host}:{cfg.get('port','22')}")
+        ident = cfg.get("identityfile", "")
+        if ident:
+            path = os.path.expanduser(ident.strip("'\""))
+            mark = "存在" if os.path.exists(path) else "❌ 文件不存在"
+            if path.endswith(".pub"):
+                mark = "❌ 这是公钥，应填私钥（去掉 .pub）"
+            self.log(f"    私钥 {ident}  [{mark}]")
+
+        # 目标 IP 是否被劫持
+        try:
+            import socket
+            real = socket.gethostbyname(host)
+        except Exception:  # noqa: BLE001
+            real = ""
+        if real and real != host:
+            self.log(f"    {host} 解析为 {real}")
+        probe = real or host
+        for prefix, why in self.FAKE_IP_HINTS:
+            if probe.startswith(prefix):
+                self.log(f"    ⚠️ 目标 IP {probe} 落在 {prefix}x 段：{why}", "error")
+                self.log("       → 让代理放行这个地址，或临时关掉 TUN/增强模式再试", "error")
+                break
+
+        if extra:
+            for prefix, why in self.FAKE_IP_HINTS:
+                if prefix in extra:
+                    self.log(f"    ⚠️ 错误信息里出现 {prefix}x 段地址：{why}", "error")
+                    self.log("       → 代理把连接劫持走了，放行该地址或关掉 TUN 模式", "error")
+                    break
+
+        self.log(f"    手动验证： ssh -N -v {self.alias}", "warn")
 
     def _read_tunnel_err(self):
         """取隧道进程的 stderr（最多 6 行有效信息）"""
@@ -828,6 +890,11 @@ class BridgeApp:
                                 srv.tunnel_spawn()
                             except Exception as exc:  # noqa: BLE001
                                 self.log(f"[{srv.label}] 重连失败: {exc}", "error")
+                                if srv._retry_n == 1:         # 只在首次失败时详细诊断
+                                    try:
+                                        srv.diagnose(str(exc))
+                                    except Exception:  # noqa: BLE001
+                                        pass
                                 srv._retry_at = now + 60      # 配置类错误，别高频重试
                             srv._retry_at = now + delay
                             streaks[srv.sid] = 0
@@ -962,9 +1029,9 @@ class BridgeApp:
             port, err = srv.register()
             if err:
                 self.log(f"  登记失败: {err}", "error")
-                self.log(f"  自查 1：终端能否连上 →  ssh {srv.alias} echo ok", "warn")
-                self.log(f"  自查 2：服务器上是否装了工具 →  ssh {srv.alias} 'which bridge-register'", "warn")
-                self.log("  自查 3：没装的话在服务器上跑 bridge-install.sh", "warn")
+                srv.diagnose(err)
+                self.log(f"  若配置无误，检查服务器是否装了工具： "
+                         f"ssh {srv.alias} 'which bridge-register'", "warn")
                 return
             self.log(f"  已登记，分配端口 {port}")
             self._persist()
