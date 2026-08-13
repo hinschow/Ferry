@@ -417,6 +417,7 @@ class Server:
         self._retry_at = 0.0      # 下次允许重连的时刻（指数退避）
         self._retry_n = 0         # 连续失败次数
         self._port_conflict = 0   # 连续「服务器端口被占用」次数
+        self._spawn_lock = threading.Lock()
         self._err = None          # 隧道进程的 stderr 临时文件
         self._fixed_pipe = False  # 是否已尝试补挂状态管道
 
@@ -441,6 +442,15 @@ class Server:
         except (TypeError, ValueError):
             v = 0
         return v or None
+
+    @property
+    def srv_mnt_root(self):
+        """服务器上本机的挂载根。老服务器不回报这个，退回历史默认值。"""
+        return self.conf.get("srv_mnt_root") or f"/root/mnt/{machine_id()}"
+
+    @property
+    def srv_status_mp(self):
+        return self.conf.get("srv_status_mp") or f"/root/.winbridge/status/{machine_id()}"
 
     @property
     def status_dir(self):
@@ -505,6 +515,12 @@ class Server:
                     port = int(line.split("=", 1)[1].strip())
                 except ValueError:
                     pass
+            # 服务器那边的路径由它自己说了算 —— 角色账户下不是 /root/...，
+            # 客户端拼死路径会去创建没权限的目录（实测 pc3 就栽在这）
+            elif line.startswith("MNT_ROOT="):
+                self.conf["srv_mnt_root"] = line.split("=", 1)[1].strip()
+            elif line.startswith("STATUS_MP="):
+                self.conf["srv_status_mp"] = line.split("=", 1)[1].strip()
         if port is None:
             return None, "服务器未返回端口: " + out.strip()[:120]
         if port != self.conf.get("tunnel_port"):
@@ -513,6 +529,16 @@ class Server:
 
     # ---- 隧道
     def tunnel_spawn(self):
+        with self._spawn_lock:
+            return self._tunnel_spawn_locked()
+
+    def _tunnel_spawn_locked(self):
+        p = self.tunnel_proc
+        if p is not None and p.poll() is None:
+            # 已经有一条活着的了。再起一条只会撞自己的端口，
+            # 然后把 tunnel_proc 指向新的那条，旧的变成占着端口的孤儿。
+            self.log(f"[{self.label}] 隧道已在运行，跳过重复建立", "warn")
+            return
         port = self.port
         if port is None:
             # 还没在服务器上登记过 —— 先领一个端口再建隧道
@@ -1006,12 +1032,12 @@ class MountDialog(tk.Toplevel):
         self.grab_set()
         self.wait_window(self)
 
-    # ---- 默认位置：/root/mnt/<本机名>/<路径转成的名字>
+    # ---- 默认位置：服务器报回来的挂载根 + 路径转成的名字
     def _default_target(self):
         local = self.v_local.get().strip()
         if not local:
             return ""
-        return f"/root/mnt/{machine_id()}/{default_mount_dir(local)}"
+        return f"{self.srv.srv_mnt_root}/{default_mount_dir(local)}"
 
     def _sync_default(self):
         if not self.server_touched:
@@ -1042,7 +1068,7 @@ class MountDialog(tk.Toplevel):
                                 parent=self)
             return
         cur = self.v_server.get().strip()
-        start = os.path.dirname(cur.rstrip("/")) if cur.startswith("/") else f"/root/mnt/{machine_id()}"
+        start = os.path.dirname(cur.rstrip("/")) if cur.startswith("/") else self.srv.srv_mnt_root
         dlg = RemoteBrowser(self, self.srv, start or "/")
         if dlg.result:
             self.server_touched = True
@@ -1826,8 +1852,9 @@ class BridgeApp:
         try:
             mid = machine_id()
             rc, out = srv.on_server(
-                f"bridge-mount -c {mid} {shlex_quote(srv.status_dir)} "
-                f"/root/.winbridge/status/{mid} 2>&1; "
+                # --status 让服务器自己决定挂载点：角色账户下不是 /root/...，
+                # 客户端拼死路径会去建它没权限的目录
+                f"bridge-mount -c {mid} {shlex_quote(srv.status_dir)} --status 2>&1; "
                 f"bridge-statusd start -c {mid} 2>&1", 60)
             bad = [l for l in out.splitlines() if l.startswith("ERR|")]
             if bad:
@@ -1923,7 +1950,7 @@ class BridgeApp:
         self.log(f"  → 记得在该服务器上把状态目录挂过去："
                  f"bridge-mount -c {machine_id()} "
                  f"{shlex_quote(os.path.join(STATUS_ROOT, srv.sid))} "
-                 f"/root/.winbridge/status/{machine_id()}")
+                 f"{srv.srv_status_mp}")
         self._refresh_servers()
 
     def _add_by_invite(self):
@@ -2008,7 +2035,7 @@ class BridgeApp:
                 try:
                     srv.on_server(
                         f"bridge-umount -c {machine_id()} "
-                        f"/root/.winbridge/status/{machine_id()}", 25)
+                        f"{srv.srv_status_mp}", 25)
                 except Exception:  # noqa: BLE001
                     pass
             srv.tunnel_kill()
@@ -2287,7 +2314,7 @@ class BridgeApp:
         for path in rows:
             mp = srv.mounts.get(path)
             # 没挂上时显示「打算挂到哪」，比一个 — 有用得多
-            where = mp or planned.get(path) or f"/root/mnt/{machine_id()}/{default_mount_dir(path)}"
+            where = mp or planned.get(path) or f"{srv.srv_mnt_root}/{default_mount_dir(path)}"
             self.tree.insert("", "end",
                              values=(path, where, "已挂载" if mp else "未挂载"),
                              tags=("on" if mp else "off",))

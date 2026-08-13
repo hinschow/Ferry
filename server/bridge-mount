@@ -8,6 +8,12 @@ bridge_resolve_client "$@" || exit 1
 LPATH="$1"
 [ -z "$LPATH" ] && { echo "ERR|用法: bridge-mount [-c 客户端] <本地路径> [服务器挂载点]"; exit 1; }
 
+# --status：挂状态管道。挂载点由服务器自己决定，客户端不用（也不该）拼路径。
+if [ "$2" = "--status" ] || [ "$1" = "--status" ]; then
+  [ "$1" = "--status" ] && LPATH="$2"
+  set -- "$LPATH" "$STATUS_DIR"
+fi
+
 SFTP_PATH=$(bridge_sftp_path "$LPATH")
 DEFAULT_MP="$MNT_ROOT/$(bridge_mount_name "$LPATH")"
 MP="${2:-$DEFAULT_MP}"

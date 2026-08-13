@@ -64,6 +64,11 @@ esac
   windows) SLOCAL="${TOOL}\\status\\${NAME}" ;;
   *)       SLOCAL="${TOOL}/status/${NAME}" ;;
 esac
+# 没传的字段沿用档案里已有的值 —— 客户端重连时只带必填项，
+# 不这样做的话每次重新登记都会把显示名冲成机器名。
+if [ -f "$CONF" ]; then
+  [ -z "$LABEL" ] && LABEL=$(sed -n "s/^LABEL='\(.*\)'$/\1/p" "$CONF" | head -1)
+fi
 [ -z "$LABEL" ] && LABEL="$NAME"
 
 cat > "$CONF" <<CFGEOF
@@ -81,4 +86,8 @@ mkdir -p "$FERRY_HOME/status/$NAME" "$FERRY_MNT/$NAME"
 bridge_port_claim "$NAME" "$PORT"
 echo "PORT=$PORT"
 echo "NAME=$NAME"
+# 把服务器这边的路径告诉客户端 —— 角色账户下这些不再是 /root/...，
+# 客户端如果自己拼死路径，会去创建它根本没权限的目录。
+echo "MNT_ROOT=$FERRY_MNT/$NAME"
+echo "STATUS_MP=$FERRY_HOME/status/$NAME"
 echo "OK|已登记 $NAME ($OS/$USER_) 端口 $PORT"
