@@ -1694,6 +1694,14 @@ class BridgeApp:
                     self.txt.configure(state="disabled")
                 elif kind == "busy":
                     self._set_busy(payload)
+                elif kind == "removed":
+                    # 服务器是在工作线程里摘掉的，界面重建必须回到主线程做，
+                    # 否则 Tk 会跨线程崩（macOS 上尤其必崩）
+                    self.sel_sid = self.servers[0].sid if self.servers else None
+                    self._persist()
+                    self._rebuild_server_list()
+                    self._refresh_mounts()
+                    self.log(f"已移除 {payload}")
         except queue.Empty:
             pass
         self.root.after(200, self._drain)
@@ -1952,15 +1960,34 @@ class BridgeApp:
         srv = self.current()
         if not srv:
             return
-        if srv.mounts:
-            messagebox.showwarning(APP_NAME, "该服务器仍有挂载，请先卸载。")
+        # 必须看 user_mounts 而不是 mounts —— 后者含状态管道那个内部挂载，
+        # 只要隧道连着它就一直在，用 mounts 判断的话连着的服务器永远删不掉，
+        # 而界面上的挂载表又是空的（表用的是 user_mounts），只能干瞪眼。
+        busy = srv.user_mounts
+        if busy:
+            names = "\n".join("  · " + p for p in list(busy)[:6])
+            more = f"\n  …… 还有 {len(busy) - 6} 个" if len(busy) > 6 else ""
+            messagebox.showwarning(
+                APP_NAME, f"{srv.label} 还挂着这些目录，请先卸载：\n\n{names}{more}")
             return
         if not messagebox.askyesno(APP_NAME, f"从列表移除 {srv.label}？\n（不会改动服务器本身）"):
             return
-        srv.tunnel_kill()
-        self.servers.remove(srv)
-        self._persist()
-        self.log(f"已移除 {srv.label}")
+
+        def job():
+            # 顺手把状态管道从服务器上卸掉，否则隧道一断它就成了死挂载，
+            # 之后 bridge-check 会一直报异常
+            if srv.port_ok and srv.status_mounted:
+                try:
+                    srv.on_server(
+                        f"bridge-umount -c {machine_id()} "
+                        f"/root/.winbridge/status/{machine_id()}", 25)
+                except Exception:  # noqa: BLE001
+                    pass
+            srv.tunnel_kill()
+            if srv in self.servers:
+                self.servers.remove(srv)
+            self.msgq.put(("removed", srv.label))
+        self._work(job)
         self._refresh_servers()
 
     def act_tunnel_start(self):
