@@ -352,24 +352,36 @@ def apply_invite(d, log=lambda *_a, **_k: None):
 
     # 2) 服务器公钥授权到本机（服务器要靠它回连）
     if IS_WIN:
+        # Windows sshd 的 StrictModes 很严：authorized_keys 只要还带着继承来的
+        # 权限就会被静默拒绝 —— 表现是服务器回连 Permission denied，日志里
+        # 什么都看不出来。所以两个分支都必须 icacls /inheritance:r。
+        # 目录也要显式创建：sshd 还没装时 C:\ProgramData\ssh 是不存在的。
         ps = ("$g=(Get-LocalGroup -SID 'S-1-5-32-544').Name;"
               "$a=[bool](Get-LocalGroupMember -Group $g -EA SilentlyContinue|"
               "Where-Object{$_.Name -like \"*\\$env:USERNAME\"});"
-              "if($a){$f='C:\\ProgramData\\ssh\\administrators_authorized_keys'}"
-              "else{New-Item -ItemType Directory -Force -Path \"$env:USERPROFILE\\.ssh\"|Out-Null;"
-              "$f=\"$env:USERPROFILE\\.ssh\\authorized_keys\"};"
+              "if($a){$d='C:\\ProgramData\\ssh';"
+              "$f=\"$d\\administrators_authorized_keys\"}"
+              "else{$d=\"$env:USERPROFILE\\.ssh\";$f=\"$d\\authorized_keys\"};"
+              "New-Item -ItemType Directory -Force -Path $d|Out-Null;"
+              "if(-not (Test-Path $f)){New-Item -ItemType File -Path $f|Out-Null};"
               f"$k='{d['srv_pub']}';"
-              "if((Test-Path $f) -and (Select-String -Path $f -SimpleMatch $k -Quiet)){'SKIP'}"
+              "if(Select-String -Path $f -SimpleMatch $k -Quiet){'SKIP'}"
               "else{Add-Content $f $k -Encoding ASCII;'ADDED'};"
-              "if($a){icacls $f /inheritance:r /grant \"${g}:F\" /grant 'SYSTEM:F'|Out-Null};"
-              "Restart-Service sshd -EA SilentlyContinue")
+              "if($a){icacls $f /inheritance:r /grant \"${g}:F\" /grant 'SYSTEM:F'|Out-Null}"
+              "else{icacls $f /inheritance:r /grant \"${env:USERNAME}:F\" "
+              "/grant 'SYSTEM:F'|Out-Null};"
+              "if(Get-Service sshd -EA SilentlyContinue){'HASSSHD';"
+              "Restart-Service sshd -EA SilentlyContinue}else{'NOSSHD'}")
         rc, out = run(["powershell", "-NoLogo", "-NonInteractive", "-Command", ps], 60)
         if "ADDED" in out:
-            tips.append("服务器公钥已授权到本机")
+            tips.append("服务器公钥已授权到本机（已收紧文件权限）")
         elif "SKIP" in out:
             tips.append("服务器公钥已存在，跳过")
         else:
             tips.append("⚠️ 授权公钥失败，可能需要管理员权限运行本程序")
+        if "NOSSHD" in out:
+            tips.append("⚠️ 本机还没装 SSH 服务 —— 服务器无法回连，挂载会失败。"
+                        "顶栏「启动」按钮可以装好后一键拉起")
     else:
         ak = os.path.join(sshdir, "authorized_keys")
         cur = open(ak, encoding="utf-8").read() if os.path.exists(ak) else ""
