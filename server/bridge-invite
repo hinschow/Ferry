@@ -1,13 +1,21 @@
 #!/bin/bash
-# bridge-invite [--name <显示名>] [--host <对外地址>] [--revoke <客户端名>]
+# bridge-invite [--name <名字>] [--host <对外地址>] [--root]
+#               [--list] [--show <名字>] [--revoke <名字>]
 #
 # 生成一段「接入码」：在客户端控制台里粘贴即可完成全部配置。
-# 码里包含：服务器地址、服务器公钥（授权到客户端本机）、
-#          一把专供该客户端登录本服务器的私钥。
 #
-# ⚠️ 接入码等同于本服务器的登录凭据，只发给你信任的机器。
+# 默认是【角色隔离】模式：为这台客户端建一个专属 Unix 账户 ferry-<名字>，
+# 它的挂载落在自己家目录里。FUSE 在没开 allow_other 时只允许挂载者本人访问 ——
+# 别的角色连 ls 都会 Permission denied，不是权限不足，是根本读不到。
+# 管理员（root）仍然可以 su 过去查看，这是设计意图。
+#
+# --root 退回旧行为：授权到 root，所有客户端共用 /root，互相之间没有隔离。
+#
+# ⚠️ 接入码等同于对应账户的登录凭据，只发给你信任的机器。
 set -e
-NAME=""; HOST=""; REVOKE=""; LIST=""; SHOW=""
+. /usr/local/lib/ferry/lib.sh
+
+NAME=""; HOST=""; REVOKE=""; LIST=""; SHOW=""; ASROOT=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --name) NAME="$2"; shift 2 ;;
@@ -15,33 +23,49 @@ while [ $# -gt 0 ]; do
     --revoke) REVOKE="$2"; shift 2 ;;
     --list|-l) LIST=1; shift ;;
     --show) SHOW="$2"; shift 2 ;;
-    *) echo "用法: bridge-invite [--name 名字] [--host 对外地址]"
-       echo "      bridge-invite --list              列出已发放的接入码"
-       echo "      bridge-invite --show <名字>       重新显示已有的接入码"
-       echo "      bridge-invite --revoke <名字>     撤销某台机器"
+    --root) ASROOT=1; shift ;;
+    *) cat <<'USAGE'
+用法: bridge-invite --name <名字>          发放接入码（默认建独立角色账户）
+      bridge-invite --name <名字> --root   不建账户，授权到 root（无隔离）
+      bridge-invite --list                 列出已发放的
+      bridge-invite --show <名字>          重新显示某一张
+      bridge-invite --revoke <名字>        撤销某台机器
+USAGE
        exit 1 ;;
   esac
 done
 
-KEYDIR=/root/.winbridge/invites
+KEYDIR="$FERRY_HOME/invites"
 mkdir -p "$KEYDIR"; chmod 700 "$KEYDIR"
+
+# 某张接入码对应哪个账户：发放时记下来，list/revoke 才知道去改谁的 authorized_keys
+acct_of() {
+  if [ -f "$KEYDIR/$1.acct" ]; then cat "$KEYDIR/$1.acct"; else echo root; fi
+}
+ak_of() {
+  local u="$1"
+  if [ "$u" = root ]; then echo /root/.ssh/authorized_keys
+  else echo "$(getent passwd "$u" | cut -d: -f6)/.ssh/authorized_keys"; fi
+}
 
 # ---- 列出 ----
 if [ -n "$LIST" ]; then
   n=0
-  printf "  %-22s %-12s %s\n" "名字" "状态" "发放时间"
-  printf "  %-22s %-12s %s\n" "──────────────────────" "────────────" "───────────────────"
+  printf "  %-20s %-16s %-10s %s\n" "名字" "账户" "状态" "发放时间"
+  printf "  %-20s %-16s %-10s %s\n" "────────────────────" "────────────────" "──────────" "────────────────"
   for f in "$KEYDIR"/*.pub; do
     [ -e "$f" ] || continue
-    nm=$(basename "$f" .pub)
-    fp=$(awk '{print $2}' "$f")
-    if grep -qF "$fp" /root/.ssh/authorized_keys 2>/dev/null; then st="✅ 有效"; else st="⚪ 已失效"; fi
-    printf "  %-22s %-12s %s\n" "$nm" "$st" "$(date -r "$f" '+%Y-%m-%d %H:%M')"
+    nm=$(basename "$f" .pub); fp=$(awk '{print $2}' "$f")
+    u=$(acct_of "$nm")
+    if grep -qF "$fp" "$(ak_of "$u")" 2>/dev/null; then st="✅ 有效"; else st="⚪ 已失效"; fi
+    [ "$u" = root ] && u="root（无隔离）"
+    printf "  %-20s %-16s %-10s %s\n" "$nm" "$u" "$st" "$(date -r "$f" '+%Y-%m-%d %H:%M')"
     n=$((n+1))
   done
   [ "$n" = 0 ] && echo "  （还没有发放过接入码）"
   echo
   echo "  撤销某台： bridge-invite --revoke <名字>"
+  echo "  以某个角色的身份查看它的挂载： bridge-as <名字>"
   exit 0
 fi
 
@@ -49,21 +73,28 @@ fi
 if [ -n "$REVOKE" ]; then
   K="$KEYDIR/$REVOKE"
   [ -f "$K.pub" ] || { echo "找不到该接入码: $REVOKE"; exit 1; }
-  FP=$(awk '{print $2}' "$K.pub")
-  grep -vF "$FP" /root/.ssh/authorized_keys > "$KEYDIR/.tmp" 2>/dev/null || true
-  mv "$KEYDIR/.tmp" /root/.ssh/authorized_keys
-  chmod 600 /root/.ssh/authorized_keys
-  rm -f "$K" "$K.pub"
+  FP=$(awk '{print $2}' "$K.pub"); U=$(acct_of "$REVOKE"); AK=$(ak_of "$U")
+  if [ -f "$AK" ]; then
+    grep -vF "$FP" "$AK" > "$AK.tmp" 2>/dev/null || true
+    mv "$AK.tmp" "$AK"; chmod 600 "$AK"
+    [ "$U" != root ] && chown "$U" "$AK" 2>/dev/null || true
+  fi
+  rm -f "$K" "$K.pub" "$K.acct"
   echo "已撤销 $REVOKE —— 该客户端不再能登录本服务器"
+  if [ "$U" != root ]; then
+    echo
+    echo "  账户 $U 和它家目录里的挂载配置都还留着（没删数据）。"
+    echo "  确认不再需要后可以自行清理： userdel -r $U"
+  fi
   exit 0
 fi
 
-# ---- 重新显示已有接入码 ----
+# ---- 重新显示 / 新发放 ----
 if [ -n "$SHOW" ]; then
   NAME=$(printf '%s' "$SHOW" | tr -cd '[:alnum:]._-' | cut -c1-32)
   [ -f "$KEYDIR/$NAME" ] || { echo "找不到接入码: $NAME"; echo "  用 bridge-invite --list 看已有的"; exit 1; }
-  FP=$(awk '{print $2}' "$KEYDIR/$NAME.pub")
-  grep -qF "$FP" /root/.ssh/authorized_keys 2>/dev/null || {
+  FP=$(awk '{print $2}' "$KEYDIR/$NAME.pub"); ACCT=$(acct_of "$NAME")
+  grep -qF "$FP" "$(ak_of "$ACCT")" 2>/dev/null || {
     echo "接入码 $NAME 已被撤销，无法再使用。"
     echo "  重新发放： bridge-invite --name $NAME"; exit 1; }
 else
@@ -72,9 +103,8 @@ else
 
   # ---- 重名保护：同名会共享同一把钥匙，撤销时一起失效，所以直接拦住 ----
   if [ -f "$KEYDIR/$NAME.pub" ]; then
-    FP=$(awk '{print $2}' "$KEYDIR/$NAME.pub")
-    if grep -qF "$FP" /root/.ssh/authorized_keys 2>/dev/null; then ST="仍然有效"; else ST="已被撤销"; fi
-    # 找一个可用的替代名
+    FP=$(awk '{print $2}' "$KEYDIR/$NAME.pub"); U=$(acct_of "$NAME")
+    if grep -qF "$FP" "$(ak_of "$U")" 2>/dev/null; then ST="仍然有效"; else ST="已被撤销"; fi
     i=2; SUG="$NAME-$i"
     while [ -f "$KEYDIR/$SUG.pub" ]; do i=$((i+1)); SUG="$NAME-$i"; done
     cat >&2 <<DUPEOF
@@ -93,31 +123,61 @@ else
 DUPEOF
     exit 1
   fi
+
+  # ---- 决定这张码归哪个账户 ----
+  if [ -n "$ASROOT" ]; then
+    ACCT=root
+  else
+    ACCT="ferry-$(printf '%s' "$NAME" | tr -cd '[:alnum:]-' | cut -c1-24 | tr 'A-Z' 'a-z')"
+    [ "$(id -u)" = 0 ] || { echo "建独立角色账户需要 root。用 sudo 跑，或加 --root 退回无隔离模式。"; exit 1; }
+    getent group ferry >/dev/null || groupadd ferry
+    if ! getent passwd "$ACCT" >/dev/null; then
+      useradd -m -g ferry -s /bin/bash "$ACCT"
+      echo "  已创建角色账户 $ACCT"
+    fi
+    AH=$(getent passwd "$ACCT" | cut -d: -f6)
+    chmod 700 "$AH"
+    install -d -o "$ACCT" -g ferry -m 700 "$AH/.ssh" "$AH/mnt" "$AH/.winbridge"
+    # 每个角色一把自己的回连密钥 —— 客户端授权的就是它，角色之间互不通用
+    if [ ! -f "$AH/.ssh/id_bridge" ]; then
+      ssh-keygen -t ed25519 -f "$AH/.ssh/id_bridge" -N '' -C "ferry@$ACCT" -q
+      chown "$ACCT:ferry" "$AH/.ssh/id_bridge" "$AH/.ssh/id_bridge.pub"
+    fi
+  fi
+  echo "$ACCT" > "$KEYDIR/$NAME.acct"
 fi
+
 [ -z "$HOST" ] && HOST=$(curl -s -m 5 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
 [ -z "$HOST" ] && { echo "取不到本机对外地址，请用 --host 指定"; exit 1; }
+ACCT=$(acct_of "$NAME")
+AK=$(ak_of "$ACCT")
 
 # ---- 客户端登录本服务器用的密钥（每张接入码一把，可单独撤销）----
 K="$KEYDIR/$NAME"
 if [ ! -f "$K" ]; then
   ssh-keygen -t ed25519 -f "$K" -N '' -C "ferry-invite-$NAME" -q
-  mkdir -p /root/.ssh && chmod 700 /root/.ssh
-  touch /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys
-  cat "$K.pub" >> /root/.ssh/authorized_keys
+  install -d -m 700 "$(dirname "$AK")"
+  touch "$AK"; chmod 600 "$AK"
+  cat "$K.pub" >> "$AK"
+  [ "$ACCT" != root ] && chown -R "$ACCT" "$(dirname "$AK")" 2>/dev/null || true
 fi
 
-# ---- 服务器公钥（客户端要授权它，服务器才能回连）----
-SRVPUB=$(cat /root/.ssh/id_bridge.pub 2>/dev/null || cat /root/.ssh/id_win.pub 2>/dev/null)
+# ---- 服务器回连用的公钥（客户端要授权它，服务器才能挂载）----
+if [ "$ACCT" = root ]; then
+  SRVPUB=$(cat "$FERRY_KEY.pub" 2>/dev/null || cat /root/.ssh/id_win.pub 2>/dev/null)
+else
+  SRVPUB=$(cat "$(getent passwd "$ACCT" | cut -d: -f6)/.ssh/id_bridge.pub" 2>/dev/null)
+fi
 [ -z "$SRVPUB" ] && { echo "找不到服务器公钥，请先跑 bridge-install.sh"; exit 1; }
 
-TOKEN=$(python3 - "$HOST" "$NAME" "$SRVPUB" "$K" <<'PY'
+TOKEN=$(python3 - "$HOST" "$NAME" "$SRVPUB" "$K" "$ACCT" <<'PY'
 import base64, json, sys, zlib
-host, name, srvpub, keypath = sys.argv[1:5]
+host, name, srvpub, keypath, acct = sys.argv[1:6]
 payload = {
     "v": 1,
     "host": host,
     "port": 22,
-    "user": "root",
+    "user": acct,
     "name": name,
     "srv_pub": srvpub.strip(),
     "cli_key": open(keypath, encoding="utf-8").read(),
@@ -128,20 +188,27 @@ PY
 )
 
 [ -n "$SHOW" ] && TITLE="接入码（重新显示）" || TITLE="接入码已生成"
+if [ "$ACCT" = root ]; then
+  MODE="⚠️ root 模式：本机所有客户端共用 /root，互相看得到对方的挂载"
+else
+  MODE="角色 $ACCT —— 挂载落在它的家目录，其它角色读不到（管理员可 su 查看）"
+fi
 cat <<TIPEOF
 
 ════════════════════════════════════════════════════════════════
   $TITLE    服务器 $HOST    标识 $NAME
+  $MODE
 ════════════════════════════════════════════════════════════════
 
 $TOKEN
 
 ────────────────────────────────────────────────────────────────
-  用法：打开客户端 → 「添加服务器…」→ 选「粘贴接入码」→ 粘贴上面整段
+  用法：打开客户端 →「＋ 添加」→ 选「粘贴接入码」→ 粘贴上面整段
 
-  ⚠️ 这段码包含本服务器的登录凭据，只发给你信任的机器。
+  ⚠️ 这段码包含 $ACCT 账户的登录凭据，只发给你信任的机器。
      查看全部： bridge-invite --list
      再看这张： bridge-invite --show $NAME
      吊销这台： bridge-invite --revoke $NAME
+     以该角色身份查看： bridge-as $NAME
 ════════════════════════════════════════════════════════════════
 TIPEOF

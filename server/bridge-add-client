@@ -1,15 +1,16 @@
 #!/bin/bash
 # bridge-add-client <名字> <windows|macos|linux> <该机器上的用户名> [端口]
 # 不给端口则自动挑一个没被占用的
+. /usr/local/lib/ferry/lib.sh
 NAME="$1"; OS="$2"; USER="$3"; PORT="$4"
 [ -z "$NAME" ] || [ -z "$OS" ] || [ -z "$USER" ] && {
   echo "用法: bridge-add-client <名字> <windows|macos|linux> <用户名> [端口]"; exit 1; }
-CONF="/root/.winbridge/clients/${NAME}.conf"
+CONF="$FERRY_HOME/clients/${NAME}.conf"
 [ -f "$CONF" ] && { echo "ERR|客户端 $NAME 已存在: $CONF"; exit 1; }
 
 if [ -z "$PORT" ]; then
   # 逐行剥注释与空白（不能用 tr -d '[:space:]'，那会把换行也删掉，端口会粘连）
-  USED=$(grep -h '^PORT=' /root/.winbridge/clients/*.conf 2>/dev/null \
+  USED=$(grep -h '^PORT=' "$FERRY_HOME"/clients/*.conf 2>/dev/null \
          | cut -d= -f2 | sed 's/#.*//; s/[[:space:]]//g' | grep -E '^[0-9]+$')
   PORT=2222
   while echo "$USED" | grep -qx "$PORT" || ss -tln 2>/dev/null | grep -q ":$PORT "; do
@@ -31,9 +32,9 @@ LABEL='$NAME'
 TOOL_DIR='$TOOL'
 STATUS_LOCAL='$SLOCAL'
 CFGEOF
-mkdir -p "/root/.winbridge/status/$NAME" "/root/mnt/$NAME"
+mkdir -p "$FERRY_HOME/status/$NAME" "$FERRY_MNT/$NAME"
 
-PUB=$(cat /root/.ssh/id_bridge.pub 2>/dev/null)
+PUB=$(cat "$FERRY_KEY".pub 2>/dev/null)
 SRV=$(curl -s -m 5 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
 cat <<TIPEOF
 

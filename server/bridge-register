@@ -4,6 +4,7 @@
 #
 # 由客户端在建立隧道前自动调用：客户端把自己的身份上报，服务器分配端口并建档。
 # 输出形如  PORT=2224  供客户端解析。已存在则返回原端口（幂等）。
+. /usr/local/lib/ferry/lib.sh
 NAME=""; OS=""; USER_=""; TOOL=""; SLOCAL=""; LABEL=""; PORT=""; REALLOC=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -27,8 +28,8 @@ done
 NAME=$(printf '%s' "$NAME" | tr -cd '[:alnum:]._-' | cut -c1-40)
 [ -z "$NAME" ] && { echo "ERR|名字非法"; exit 1; }
 
-CONF="/root/.winbridge/clients/${NAME}.conf"
-mkdir -p /root/.winbridge/clients
+CONF="$FERRY_HOME/clients/${NAME}.conf"
+mkdir -p "$FERRY_HOME"/clients
 
 OLDPORT=""
 if [ -f "$CONF" ]; then
@@ -39,8 +40,12 @@ fi
 if [ -z "$PORT" ]; then
   # 已被别的客户端登记的，以及此刻真的在监听的，都跳过。
   # 重新分配时要把自己那条排除掉，否则会原地打转选回同一个端口。
-  USED=$(grep -h '^PORT=' /root/.winbridge/clients/*.conf 2>/dev/null \
-         | cut -d= -f2 | sed 's/#.*//; s/[[:space:]]//g' | grep -E '^[0-9]+$')
+  # 自己这个角色已登记的 + 别的角色占着的（共享登记表）+ 此刻真在监听的。
+  # 端口是整机全局资源，只看自己家目录会和别的角色撞车。
+  USED=$(printf '%s\n%s\n' \
+         "$(grep -h '^PORT=' "$FERRY_HOME"/clients/*.conf 2>/dev/null \
+            | cut -d= -f2 | sed 's/#.*//; s/[[:space:]]//g')" \
+         "$(bridge_ports_taken "$NAME")" | grep -E '^[0-9]+$')
   [ -n "$REALLOC" ] && [ -n "$OLDPORT" ] && USED=$(echo "$USED" | grep -vx "$OLDPORT")
   PORT=2222
   while echo "$USED" | grep -qx "$PORT" || ss -tln 2>/dev/null | grep -q ":$PORT "; do
@@ -70,9 +75,10 @@ LABEL='$LABEL'
 TOOL_DIR='$TOOL'
 STATUS_LOCAL='$SLOCAL'
 CFGEOF
-mkdir -p "/root/.winbridge/status/$NAME" "/root/mnt/$NAME"
-[ -f /root/.winbridge/current ] || echo "$NAME" > /root/.winbridge/current
+mkdir -p "$FERRY_HOME/status/$NAME" "$FERRY_MNT/$NAME"
+[ -f "$FERRY_HOME"/current ] || echo "$NAME" > "$FERRY_HOME"/current
 
+bridge_port_claim "$NAME" "$PORT"
 echo "PORT=$PORT"
 echo "NAME=$NAME"
 echo "OK|已登记 $NAME ($OS/$USER_) 端口 $PORT"

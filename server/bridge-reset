@@ -1,3 +1,4 @@
 #!/bin/bash
-rm -f /root/.winbridge/cm-* 2>/dev/null
+. /usr/local/lib/ferry/lib.sh
+rm -f "$FERRY_HOME"/cm-* 2>/dev/null
 echo "已清理 SSH 复用连接"

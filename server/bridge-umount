@@ -1,6 +1,6 @@
 #!/bin/bash
 # bridge-umount [-c 客户端] <挂载点>
-. /root/.winbridge/lib.sh
+. /usr/local/lib/ferry/lib.sh
 bridge_resolve_client "$@" || exit 1
 [ $BRIDGE_SHIFT -gt 0 ] && shift $BRIDGE_SHIFT
 MP="${1%/}"
@@ -12,7 +12,7 @@ mountpoint -q "$MP" && { echo "ERR|卸载失败，可能有进程正在使用"; 
 # 只删我们自己建的空目录；用户原本就有的目录留着
 OWN=$(bridge_reg_del "$MP")
 case "$MP" in
-  /root/mnt/*) rmdir "$MP" 2>/dev/null ;;
+  "$FERRY_MNT"/*) rmdir "$MP" 2>/dev/null ;;
   *) [ "$OWN" = own ] && rmdir "$MP" 2>/dev/null ;;
 esac
 echo "OK|$MP"

@@ -2,18 +2,18 @@
 # bridge-index [-c 客户端] [<挂载点>]  — 在客户端本机生成文件索引，存到服务器本地磁盘
 #
 # 策略：git 仓库优先用 `git ls-files`（秒级，天然遵守 .gitignore）；
-#       非 git 目录才走目录遍历 + /root/.winbridge/index-exclude.txt 的排除规则。
-. /root/.winbridge/lib.sh
+#       非 git 目录才走目录遍历 + "$FERRY_HOME"/index-exclude.txt 的排除规则。
+. /usr/local/lib/ferry/lib.sh
 bridge_resolve_client "$@" || exit 1
 [ $BRIDGE_SHIFT -gt 0 ] && shift $BRIDGE_SHIFT
-IDX_DIR=/root/.winbridge/index
+IDX_DIR="$FERRY_HOME"/index
 mkdir -p "$IDX_DIR"
 
 TARGETS="$1"
 [ -z "$TARGETS" ] && TARGETS=$(awk -v p="$MNT_ROOT" '$3=="fuse.sshfs" && index($2,p)==1 {gsub(/\\040/," ",$2); print $2}' /proc/mounts)
 [ -z "$TARGETS" ] && { echo "ERR|该客户端没有挂载"; exit 1; }
 
-EXC_FILE=/root/.winbridge/index-exclude.txt
+EXC_FILE="$FERRY_HOME"/index-exclude.txt
 EXCLUDES=$(grep -v '^[[:space:]]*#' "$EXC_FILE" 2>/dev/null | grep -v '^[[:space:]]*$')
 
 for MP in $TARGETS; do

@@ -1,0 +1,24 @@
+#!/bin/bash
+# bridge-as <接入码名字|角色账户> [命令…]
+#
+# 管理员用：切进某个角色的身份，去看它的挂载。
+# 角色的挂载在 FUSE 层只允许挂载者本人访问 —— root 直接 ls 会 Permission denied，
+# 必须先 su 过去。不带命令则进交互 shell。
+. /usr/local/lib/ferry/lib.sh
+[ "$(id -u)" = 0 ] || { echo "需要 root"; exit 1; }
+T="$1"; shift || true
+[ -z "$T" ] && { echo "用法: bridge-as <接入码名字|角色账户> [命令…]"; bridge-invite --list; exit 1; }
+
+# 先按接入码名字查，查不到就当账户名用
+U=""
+[ -f "/root/.winbridge/invites/$T.acct" ] && U=$(cat "/root/.winbridge/invites/$T.acct")
+[ -z "$U" ] && U="$T"
+getent passwd "$U" >/dev/null || { echo "找不到角色: $T"; exit 1; }
+[ "$U" = root ] && { echo "「$T」是 root 模式的接入码，本来就没有独立角色。"; exit 1; }
+
+if [ $# -eq 0 ]; then
+  echo "── 以 $U 的身份 ──  退出用 exit"
+  exec su - "$U"
+else
+  exec su - "$U" -c "$*"
+fi

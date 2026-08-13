@@ -52,7 +52,20 @@ if [ ! -f /root/.winbridge/config ]; then
 # ACTIVE_PROJECT='/root/mnt/<机器名>/<目录>'   # bridge-sync-md 会把它标为「当前主项目」
 CFGEOF
 fi
+# 端口是整机全局资源。各角色跑在自己家目录里，看不到别人的登记 ——
+# 这个共享目录让它们分配端口时能互相避让。setgid 保证新文件归 ferry 组。
+getent group ferry >/dev/null || groupadd ferry
+install -d -g ferry -m 2775 /var/lib/ferry/ports
 echo "    /root/.winbridge/{clients,status,index,mounts,invites} 与 /root/mnt"
+echo "    /var/lib/ferry/ports（角色间共享的端口登记）"
+# 把已有客户端的端口补登进共享表 —— 它们是在共享表存在之前登记的，
+# 不补的话新建的角色会挑到同一个端口，一连上就 remote port forwarding failed。
+for cf in /root/.winbridge/clients/*.conf; do
+  [ -f "$cf" ] || continue
+  cn=$(sed -n 's/^NAME=//p' "$cf" | head -1)
+  cp_=$(sed -n 's/^PORT=//p' "$cf" | sed 's/#.*//; s/[[:space:]]//g' | head -1)
+  [ -n "$cn" ] && [ -n "$cp_" ] && printf 'root\t%s\t%s\n' "$cn" "$cp_" > "/var/lib/ferry/ports/root.$cn"
+done
 
 # ---- 从老版本升上来时，把确定已死的东西清掉 ----
 # 重装不清理的话，这些会一直留着：孤儿守护进程照样每 3 秒空转，
@@ -103,8 +116,10 @@ else
 fi
 
 echo "==> 4/4 安装命令行工具"
-install -m 0644 "$SRC/lib.sh" /root/.winbridge/lib.sh
+install -d -m 0755 /usr/local/lib/ferry
+install -m 0644 "$SRC/lib.sh" /usr/local/lib/ferry/lib.sh
 install -m 0644 "$SRC/index-exclude.txt" /root/.winbridge/index-exclude.txt
+rm -f /root/.winbridge/lib.sh      # 旧位置，已移到 /usr/local/lib/ferry/
 N=0
 for f in "$SRC"/bridge-*; do
   [ -f "$f" ] || continue

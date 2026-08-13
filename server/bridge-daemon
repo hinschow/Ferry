@@ -6,13 +6,13 @@
 #   Windows: 必须用计划任务（OpenSSH 会在会话结束时杀掉整个子进程树）
 #   macOS: 无 setsid 命令，用子 shell + nohup（Linux 优先 setsid）
 ACT="$1"; DNAME="$2"; shift 2 2>/dev/null
-. /root/.winbridge/lib.sh
+. /usr/local/lib/ferry/lib.sh
 bridge_resolve_client "$@" || exit 1
 [ $BRIDGE_SHIFT -gt 0 ] && shift $BRIDGE_SHIFT
 NAME="$DNAME"          # 客户端档案里的 NAME= 会覆盖它，所以在 source 之后恢复
 
 # daemon 脚本与日志放进【已挂载的状态目录】，不再为此单独挂载工具目录
-DAEMON_SRV="/root/.winbridge/status/$CLIENT/daemons"
+DAEMON_SRV="$FERRY_HOME/status/$CLIENT/daemons"
 if [ "$OS" = "windows" ]; then
   DAEMON_LOCAL="${STATUS_LOCAL:-${TOOL_DIR}\\status\\${STATUS_SUB:-$CLIENT}}\\daemons"
 else

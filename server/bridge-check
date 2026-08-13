@@ -1,9 +1,9 @@
 #!/bin/bash
 # bridge-check [-c 客户端]   不带 -c 则检查全部
-. /root/.winbridge/lib.sh
+. /usr/local/lib/ferry/lib.sh
 check_one() {
   local conf="$1"; ( . "$conf"
-    CLIENT="$NAME"; MNT_ROOT="/root/mnt/$CLIENT"; STATUS_DIR="/root/.winbridge/status/$CLIENT"
+    CLIENT="$NAME"; MNT_ROOT="$FERRY_MNT/$CLIENT"; STATUS_DIR="$FERRY_HOME/status/$CLIENT"
     printf '\n══ %s (%s / %s) ══\n' "$CLIENT" "$OS" "$LABEL"
     if ss -tln 2>/dev/null | grep -q ":$PORT "; then echo "  隧道端口 $PORT   ✅ 已监听"
     else echo "  隧道端口 $PORT   ❌ 未监听 —— 该机器未建立隧道"; return 1; fi
@@ -20,5 +20,5 @@ check_one() {
     else echo "  状态管道     ⚠️ 未挂载（客户端会回退 SSH 探测）"; fi
   )
 }
-if [ "$1" = "-c" ]; then check_one "/root/.winbridge/clients/$2.conf"
-else for f in /root/.winbridge/clients/*.conf; do check_one "$f"; done; fi
+if [ "$1" = "-c" ]; then check_one "$FERRY_HOME/clients/$2.conf"
+else for f in "$FERRY_HOME"/clients/*.conf; do check_one "$f"; done; fi

@@ -1,13 +1,13 @@
 #!/bin/bash
 # bridge-statusd start|stop|status [-c 客户端]   不带 -c 则对所有客户端操作
 ACT="$1"; shift
-. /root/.winbridge/lib.sh
+. /usr/local/lib/ferry/lib.sh
 
 one() {
   local conf="$1" act="$2"
   ( . "$conf"
-    CLIENT="$NAME"; MNT_ROOT="/root/mnt/$CLIENT"; SDIR="/root/.winbridge/status/$CLIENT"
-    PIDF="/root/.winbridge/statusd-$CLIENT.pid"
+    CLIENT="$NAME"; MNT_ROOT="$FERRY_MNT/$CLIENT"; SDIR="$FERRY_HOME/status/$CLIENT"
+    PIDF="$FERRY_HOME/statusd-$CLIENT.pid"
     case "$act" in
       start)
         if [ -f "$PIDF" ] && kill -0 "$(cat "$PIDF")" 2>/dev/null; then
@@ -40,7 +40,7 @@ one() {
           done
         }
         setsid bash -c "PORT=$PORT CLIENT=$CLIENT OS=$OS MNT_ROOT=$MNT_ROOT SDIR=$SDIR
-                        REGF=/root/.winbridge/mounts/$CLIENT.tsv
+                        REGF="$FERRY_HOME"/mounts/$CLIENT.tsv
                         $(declare -f loop); loop" >/dev/null 2>&1 < /dev/null &
         echo $! > "$PIDF"; echo "  $CLIENT: 已启动 (pid $!)" ;;
       stop)
@@ -54,7 +54,7 @@ one() {
 
 case "$ACT" in
   start|stop|status)
-    if [ "$1" = "-c" ]; then one "/root/.winbridge/clients/$2.conf" "$ACT"
-    else for f in /root/.winbridge/clients/*.conf; do one "$f" "$ACT"; done; fi ;;
+    if [ "$1" = "-c" ]; then one "$FERRY_HOME/clients/$2.conf" "$ACT"
+    else for f in "$FERRY_HOME"/clients/*.conf; do one "$f" "$ACT"; done; fi ;;
   *) echo "用法: bridge-statusd start|stop|status [-c 客户端]"; exit 1 ;;
 esac

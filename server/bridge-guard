@@ -1,8 +1,9 @@
 #!/bin/bash
 # bridge-guard start|stop|status|once
-# 守护挂载：自动终止在 /root/mnt/** 上做全树遍历的进程（Cursor 索引、误用的 find/rg 等）
-PIDF=/root/.winbridge/guard.pid
-LOG=/root/.winbridge/guard.log
+# 守护挂载：自动终止在 "$FERRY_MNT"/** 上做全树遍历的进程（Cursor 索引、误用的 find/rg 等）
+. /usr/local/lib/ferry/lib.sh
+PIDF="$FERRY_HOME"/guard.pid
+LOG="$FERRY_HOME"/guard.log
 
 scan_once() {
   local killed=0
@@ -14,8 +15,8 @@ scan_once() {
     # 只管作用在挂载上的；bridge-* 自己的命令放行
     case "$cmd" in *bridge-*) continue ;; esac
     case "$cwd" in
-      /root/mnt/*|/root/local-project*) ;;
-      *) case "$cmd" in *"/root/mnt/"*|*"/root/local-project"*) ;; *) continue ;; esac ;;
+      "$FERRY_MNT"/*|/root/local-project*) ;;
+      *) case "$cmd" in *"$FERRY_MNT/"*|*"/root/local-project"*) ;; *) continue ;; esac ;;
     esac
     # 跑满 20 秒才动手，避免误杀正常的短命令
     local et; et=$(ps -o etimes= -p "$p" 2>/dev/null | tr -d ' ')

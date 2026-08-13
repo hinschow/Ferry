@@ -1,5 +1,6 @@
 #!/bin/bash
 # 把当前挂载状态同步进 /root/CLAUDE.md 的标记区块，让新会话总能看到最新映射
+. /usr/local/lib/ferry/lib.sh
 MD="${1:-/root/CLAUDE.md}"
 BEGIN='<!-- BRIDGE-MOUNTS:BEGIN 由 bridge-sync-md 自动生成，勿手改 -->'
 END='<!-- BRIDGE-MOUNTS:END -->'
@@ -10,7 +11,7 @@ BODY=$(
   echo "> 本节由 \`bridge-sync-md\` 生成，更新于 $(date '+%Y-%m-%d %H:%M')。"
   echo "> **实时状态请跑 \`bridge-mounts\`；本表可能已过期。**"
   echo ""
-  ACTIVE=$(sed -n 's/^ACTIVE_PROJECT=//p' /root/.winbridge/config 2>/dev/null | sed 's/#.*//' | tr -d "'\" ")
+  ACTIVE=$(sed -n 's/^ACTIVE_PROJECT=//p' "$FERRY_HOME"/config 2>/dev/null | sed 's/#.*//' | tr -d "'\" ")
   if [ -n "$ACTIVE" ]; then
     echo "**当前主项目**：\`$ACTIVE\`"
     echo ""
@@ -19,9 +20,9 @@ BODY=$(
   echo "|---|---|---|"
   awk '$3=="fuse.sshfs"{gsub(/\\040/," ",$2); print $2"\t"$1}' /proc/mounts | while IFS=$'\t' read -r mp src; do
     case "$mp" in
-      /root/.winbridge/status/*) continue ;;   # 内部管道不展示
+      "$FERRY_HOME"/status/*) continue ;;   # 内部管道不展示
     esac
-    client=$(printf '%s' "$mp" | sed -n 's|^/root/mnt/\([^/]*\)/.*|\1|p')
+    client=$(printf '%s' "$mp" | sed -n 's|^"$FERRY_MNT"/\([^/]*\)/.*|\1|p')
     [ -z "$client" ] && client="-"
     local_path=$(printf '%s' "$src" | sed 's/^[^:]*://; s|^/\([A-Za-z]\):|\1:|')
     case "$local_path" in

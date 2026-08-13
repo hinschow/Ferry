@@ -5,7 +5,7 @@
 # 输出：
 #   CWD|<当前绝对路径>
 #   D|<子目录名>|<free|mounted>
-. /root/.winbridge/lib.sh
+. /usr/local/lib/ferry/lib.sh
 bridge_resolve_client "$@" || exit 1
 [ $BRIDGE_SHIFT -gt 0 ] && shift $BRIDGE_SHIFT
 

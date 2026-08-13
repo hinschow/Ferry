@@ -1,12 +1,12 @@
 #!/bin/bash
 # bridge-mounts [-c 客户端]   不带 -c 则列出全部
-. /root/.winbridge/lib.sh
+. /usr/local/lib/ferry/lib.sh
 if [ "$1" = "-c" ]; then
   bridge_resolve_client "$@" || exit 1
   # 属于本客户端的挂载 = 落在 MNT_ROOT 下的 + 状态管道 + 登记表里自选位置的。
   # 登记表走 -v 传进去而不是当第一个文件读 —— 表为空时 NR==FNR 会对
   # /proc/mounts 的每一行都成立，结果一条都不输出。
-  awk -v p="$MNT_ROOT/" -v s="/root/.winbridge/status/$CLIENT" \
+  awk -v p="$MNT_ROOT/" -v s="$FERRY_HOME/status/$CLIENT" \
       -v reglist="$(bridge_reg_points)" '
     BEGIN { n=split(reglist, a, "\n"); for (i=1;i<=n;i++) if (a[i]!="") reg[a[i]]=1 }
     $3!="fuse.sshfs" { next }

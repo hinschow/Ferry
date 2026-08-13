@@ -1,8 +1,8 @@
 #!/bin/bash
 # bridge-mount [-c 客户端] <本地路径> [服务器挂载点]
 #
-# 挂载点可以自选。不给就落在 /root/mnt/<客户端>/<路径转成的名字>。
-. /root/.winbridge/lib.sh
+# 挂载点可以自选。不给就落在 "$FERRY_MNT"/<客户端>/<路径转成的名字>。
+. /usr/local/lib/ferry/lib.sh
 bridge_resolve_client "$@" || exit 1
 [ $BRIDGE_SHIFT -gt 0 ] && shift $BRIDGE_SHIFT
 LPATH="$1"
@@ -29,7 +29,7 @@ if [ "$MP" != "$STATUS_DIR" ]; then
   case "$MP" in
     /|/bin|/boot|/dev|/etc|/home|/lib|/lib64|/proc|/root|/run|/sbin|/srv|/sys|/tmp|/usr|/var)
       echo "ERR|$MP 是系统目录，不能当挂载点"; exit 1 ;;
-    /root/.ssh*|/root/.winbridge*)
+    /root/.ssh*|"$FERRY_HOME"*)
       echo "ERR|$MP 是桥接自己的目录，不能当挂载点"; exit 1 ;;
   esac
 fi
@@ -62,7 +62,7 @@ fi
 
 # ---------------------------------------------------------------- 挂载
 ERR=$(sshfs -p "$PORT" "$USER@127.0.0.1:$SFTP_PATH" "$MP" \
-  -o IdentityFile=/root/.ssh/id_bridge,reconnect,ServerAliveInterval=15,ServerAliveCountMax=3 \
+  -o IdentityFile="$FERRY_KEY",reconnect,ServerAliveInterval=15,ServerAliveCountMax=3 \
   -o compression=yes,max_conns=4 \
   -o cache=yes,kernel_cache,cache_timeout=60 \
   -o attr_timeout=15,entry_timeout=15,negative_timeout=5 \

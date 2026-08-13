@@ -1,6 +1,6 @@
 #!/bin/bash
 # bridge-grep [-c 客户端] [-d 目录] <pattern> [路径...]  — 用本地机器的 ripgrep 搜索
-. /root/.winbridge/lib.sh
+. /usr/local/lib/ferry/lib.sh
 bridge_resolve_client "$@" || exit 1
 [ $BRIDGE_SHIFT -gt 0 ] && shift $BRIDGE_SHIFT
 D=(); if [ "$1" = "-d" ]; then D=(-d "$2"); shift 2; fi

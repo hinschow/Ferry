@@ -1,8 +1,9 @@
 #!/bin/bash
 # bridge-find <关键词>  — 在预建索引里秒查文件路径（不碰挂载）
+. /usr/local/lib/ferry/lib.sh
 PAT="$*"
 [ -z "$PAT" ] && { echo "用法: bridge-find <文件名关键词>"; exit 1; }
-IDX_DIR=/root/.winbridge/index
+IDX_DIR="$FERRY_HOME"/index
 [ -d "$IDX_DIR" ] || { echo "尚无索引，先跑: bridge-index"; exit 1; }
 FOUND=0
 for f in "$IDX_DIR"/*.txt; do
