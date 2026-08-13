@@ -141,6 +141,28 @@ def sshd_status():
     return (_port22_open(), "运行中" if _port22_open() else "未运行")
 
 
+def sshd_start():
+    """把本机 sshd 拉起来。返回 (成功, 提示)。
+
+    Windows 上启动服务要管理员权限，控制台本身是普通用户跑的 ——
+    所以走 Start-Process -Verb RunAs 弹一次 UAC，而不是直接失败。
+    """
+    if IS_WIN:
+        ps = ("Start-Process powershell -Verb RunAs -Wait -WindowStyle Hidden "
+              "-ArgumentList '-NoLogo','-NonInteractive','-Command',"
+              "'Start-Service sshd; Set-Service sshd -StartupType Automatic'")
+        rc, out = run(["powershell", "-NoLogo", "-NonInteractive", "-Command", ps], 90)
+        if rc != 0:
+            return False, "启动失败（UAC 被取消？）：管理员 PowerShell 跑 Start-Service sshd"
+        ok, text = sshd_status()
+        return ok, ("sshd 已启动，并设为开机自启" if ok else f"仍未运行：{text}")
+    if IS_MAC:
+        return (False, "Mac 需手动开：系统设置 → 通用 → 共享 → 远程登录")
+    rc, out = run(["systemctl", "start", "ssh"], 25)
+    ok, text = sshd_status()
+    return ok, ("sshd 已启动" if ok else "需要 root：sudo systemctl start ssh")
+
+
 def sshd_stop():
     """返回 (成功, 提示文案)"""
     if IS_WIN:
@@ -1427,6 +1449,9 @@ class BridgeApp:
         v = ttk.Label(sshd_box, text="—", style="Bg.TLabel")
         v.pack(side="left")
         self.dots["sshd"], self.vals["sshd"] = d, v
+        # 没跑的时候才出现 —— 服务器全靠它回连，停着的话什么都挂不上
+        self.btn_sshd = flat_btn(sshd_box, "启动", self.act_start_sshd,
+                                 fg=C_WARN, hover=C_ACCENT, padx=6, pady=1)
 
         # ═══════════ 主体：左服务器 · 右挂载与日志 ═══════════
         sidew = int(fs * 25)
@@ -1691,6 +1716,15 @@ class BridgeApp:
         else:
             self.logbox.grid_forget()
             self.btn_log.configure(text="▸ 运行日志")
+
+    def act_start_sshd(self):
+        def job():
+            self.log("正在启动本机 SSH 服务…")
+            ok, msg = sshd_start()
+            self.log(("  " + msg) if ok else ("  " + msg), "info" if ok else "error")
+            if ok:
+                self.sshd = {"ok": True, "text": "运行中"}
+        self._work(job)
 
     def act_theme(self):
         """ttk 样式是建界面时一次性配好的，换主题最干净的办法是就地重启"""
@@ -2331,6 +2365,10 @@ class BridgeApp:
         self.dots["sshd"].configure(
             fg=C_OK if v.get("ok") else (C_NA if v.get("ok") is None else C_BAD))
         self.vals["sshd"].configure(text=v.get("text", "—"))
+        if v.get("ok") is False and not self.btn_sshd.winfo_ismapped():
+            self.btn_sshd.pack(side="left", padx=(6, 0))
+        elif v.get("ok") and self.btn_sshd.winfo_ismapped():
+            self.btn_sshd.pack_forget()
 
         if srv:
             self.lbl_mount_of.configure(text=f"· {srv.label}")
