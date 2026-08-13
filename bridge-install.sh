@@ -54,6 +54,40 @@ CFGEOF
 fi
 echo "    /root/.winbridge/{clients,status,index,mounts,invites} 与 /root/mnt"
 
+# ---- 从老版本升上来时，把确定已死的东西清掉 ----
+# 重装不清理的话，这些会一直留着：孤儿守护进程照样每 3 秒空转，
+# 改名前的旧脚本还 source 着早已删除的配置键，跑起来必错。
+LEGACY=0
+# ① 单客户端时代的状态守护（现在是每客户端一个 statusd-<名>.pid）
+if [ -f /root/.winbridge/statusd.pid ]; then
+  OLDPID=$(cat /root/.winbridge/statusd.pid 2>/dev/null)
+  # 只杀确认是旧式的：旧守护用 STATUS_DIR=，新的每客户端守护用 SDIR=。
+  # pid 可能已被系统回收给别的进程，所以必须核对命令行再动手。
+  CL=$(tr "\0" " " < "/proc/$OLDPID/cmdline" 2>/dev/null || true)
+  if [ -n "$OLDPID" ] && kill -0 "$OLDPID" 2>/dev/null &&
+     case "$CL" in *STATUS_DIR=/root/.winbridge/status*) case "$CL" in *SDIR=*) false ;; *) true ;; esac ;; *) false ;; esac; then
+    kill "$OLDPID" 2>/dev/null && LEGACY=$((LEGACY+1))
+  fi
+  rm -f /root/.winbridge/statusd.pid
+fi
+# ② win-* 改名为 bridge-* 时留下的旧脚本（软链是有效的兼容入口，保留）
+for f in /usr/local/bin/win-*.legacy /usr/local/bin/win-statusd /usr/local/bin/winrun /usr/local/bin/winrun2; do
+  [ -e "$f" ] && [ ! -L "$f" ] && { rm -f "$f"; LEGACY=$((LEGACY+1)); }
+  [ -L "$f" ] && [ ! -e "$(readlink -f "$f")" ] && { rm -f "$f"; LEGACY=$((LEGACY+1)); }
+done
+# ③ config 里单客户端时代的键（每台机器的信息现在在 clients/<名>.conf）
+if [ -f /root/.winbridge/config ] && grep -qE '^(WIN_USER|WIN_PORT|WIN_PROJECT|TOOL_DIR_WIN|MOUNT_POINT|STATUS_DIR)=' /root/.winbridge/config; then
+  KEEP=$(grep -E '^ACTIVE_PROJECT=' /root/.winbridge/config || true)
+  cp /root/.winbridge/config /root/.winbridge/config.bak
+  { echo "# 全局可选项。每台本地机的信息在 clients/<机器名>.conf，由客户端自动上报生成，"
+    echo "# 不要在这里写机器相关的东西。"
+    [ -n "$KEEP" ] && echo "$KEEP"
+  } > /root/.winbridge/config
+  LEGACY=$((LEGACY+1))
+  echo "    已精简 config（旧版备份在 config.bak）"
+fi
+[ "$LEGACY" -gt 0 ] && echo "    清理了 $LEGACY 处老版本残留"
+
 echo "==> 3/4 生成专用密钥"
 if [ -f /root/.ssh/id_bridge ]; then
   echo "    已存在，跳过"

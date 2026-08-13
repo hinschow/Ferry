@@ -50,7 +50,17 @@ cd ~/Ferry && bash bridge-install.sh
 需要 **root**、**sshfs**、**`/dev/fuse`**。sshfs 没装脚本会自己装；
 容器里若没有 `/dev/fuse` 会直接报错退出 —— FUSE 挂载是这套东西的前提。
 
-> 这台服务器装过了就跳过。判断办法：`bridge-check` 能跑出东西就是装好了。
+> **已经装过老版本？** 同一条命令就是升级，直接重跑：
+> ```bash
+> cd ~/Ferry && git pull && bash bridge-install.sh
+> ```
+> 它是幂等的：已有密钥跳过、`/root/.winbridge/config` 不覆盖、**隧道和挂载全程不断**。
+> 还会顺带清掉老版本残留（单客户端时代的孤儿状态守护、改名前的 `win-*.legacy`
+> 旧脚本、config 里已无人读取的 `WIN_*` 键 —— 旧 config 备份成 `config.bak`）。
+>
+> ⚠️ 老版本可以单文件 scp `bridge-install.sh` 过去，**新版本不行** ——
+> 它从同目录的 `server/` 装，必须克隆整个仓库。不是 git clone 装的那台，
+> `rm -rf ~/Ferry` 后重新 clone 即可。
 
 ### 第 2 步：在服务器上发一张接入码
 
