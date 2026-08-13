@@ -416,6 +416,7 @@ class Server:
         self._warned = False
         self._retry_at = 0.0      # 下次允许重连的时刻（指数退避）
         self._retry_n = 0         # 连续失败次数
+        self._port_conflict = 0   # 连续「服务器端口被占用」次数
         self._err = None          # 隧道进程的 stderr 临时文件
         self._fixed_pipe = False  # 是否已尝试补挂状态管道
 
@@ -472,8 +473,11 @@ class Server:
         return run(["ssh", "-n", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
                     "-o", "ClearAllForwardings=yes", self.alias, cmd], timeout)
 
-    def register(self):
+    def register(self, realloc=False):
         """把本机身份上报给服务器，换回分配的隧道端口。
+
+        realloc=True 时让服务器忽略存着的端口重新挑一个 —— 存的那个
+        被别人占住时，不这样做就会一直拿回同一个端口、一直建不起隧道。
 
         用户不需要手填用户名/系统/端口 —— 这些本机自己就知道。
         服务器端幂等：已登记则返回原端口。
@@ -488,6 +492,8 @@ class Server:
             "--tool-dir", shlex_quote(BASE_DIR),
             "--status-local", shlex_quote(self.status_dir),
         ]
+        if realloc:
+            args.append("--realloc")
         rc, out = self.on_server(" ".join(args), 30)
         if rc != 0:
             msg = " / ".join([l.strip() for l in out.splitlines() if l.strip()][-3:])
@@ -553,6 +559,7 @@ class Server:
                 h, rem = divmod(secs, 3600)
                 m, s = divmod(rem, 60)
                 up = f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+            self._port_conflict = 0
             return {"ok": True, "text": f"已连接 {up}".strip(), "owner": "self"}
         if p is not None:
             code = p.returncode
@@ -568,6 +575,17 @@ class Server:
                     self.log(f"    ⚠️ 出现 {prefix}x 段地址：{why}", "error")
                     self.log("       → 代理劫持了这条连接，放行该地址或关掉 TUN 模式", "error")
                     break
+            if "remote port forwarding failed" in blob.lower():
+                # 服务器上这个端口已经被占了。第一次多半是自己上一条隧道
+                # 还没释放（sshd 要等旧连接完全关闭），等一下就好；
+                # 连着两次还这样，就是真被别人占了，得换端口。
+                self._port_conflict += 1
+                self.log(f"    服务器 {self.alias} 的端口 {self.port} 已被占用"
+                         f"（第 {self._port_conflict} 次）", "error")
+                if self._port_conflict == 1:
+                    self.log("    可能是上一条隧道还没释放，稍后重试…", "warn")
+                else:
+                    self.log("    将向服务器申请换一个端口", "warn")
             if code == 255 and not detail:
                 self.log("    SSH 通用错误。终端手动跑一次看详情： "
                          f"ssh -N -v {self.alias}", "warn")
@@ -706,7 +724,8 @@ class Server:
         if self._probes == 3 and not self._warned:
             self._warned = True
             self.log(f"[{self.label}] 状态文件读不到，回退 SSH 探测；"
-                     f"检查服务器是否挂载了状态目录 status\\{self.sid}", "warn")
+                     f"检查服务器是否挂载了状态目录 "
+                     f"{os.path.join('status', self.sid)}", "warn")
         self.poll_ssh()
 
     def poll_ssh(self):
@@ -1753,6 +1772,15 @@ class BridgeApp:
                             try:
                                 srv.tunnel_kill()
                                 srv.want_up = True
+                                if srv._port_conflict >= 2:
+                                    old_port = srv.port
+                                    newp, rerr = srv.register(realloc=True)
+                                    if rerr:
+                                        self.log(f"  换端口失败: {rerr}", "error")
+                                    elif newp and newp != old_port:
+                                        self.log(f"  服务器改分配端口 {old_port} → {newp}")
+                                        self._persist()
+                                    srv._port_conflict = 0
                                 srv.tunnel_spawn()
                             except Exception as exc:  # noqa: BLE001
                                 self.log(f"[{srv.label}] 重连失败: {exc}", "error")

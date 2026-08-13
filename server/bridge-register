@@ -4,7 +4,7 @@
 #
 # 由客户端在建立隧道前自动调用：客户端把自己的身份上报，服务器分配端口并建档。
 # 输出形如  PORT=2224  供客户端解析。已存在则返回原端口（幂等）。
-NAME=""; OS=""; USER_=""; TOOL=""; SLOCAL=""; LABEL=""; PORT=""
+NAME=""; OS=""; USER_=""; TOOL=""; SLOCAL=""; LABEL=""; PORT=""; REALLOC=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --name) NAME="$2"; shift 2 ;;
@@ -14,6 +14,10 @@ while [ $# -gt 0 ]; do
     --status-local) SLOCAL="$2"; shift 2 ;;
     --label) LABEL="$2"; shift 2 ;;
     --port) PORT="$2"; shift 2 ;;
+    # 存着的端口被别人占了时用：忽略旧值，重新挑一个空的。
+    # 不加这个的话，客户端拿回来的永远是那个占用中的端口，
+    # 隧道会一直 remote port forwarding failed，出不来。
+    --realloc) REALLOC=1; shift ;;
     *) echo "ERR|未知参数: $1"; exit 1 ;;
   esac
 done
@@ -26,16 +30,25 @@ NAME=$(printf '%s' "$NAME" | tr -cd '[:alnum:]._-' | cut -c1-40)
 CONF="/root/.winbridge/clients/${NAME}.conf"
 mkdir -p /root/.winbridge/clients
 
-if [ -f "$CONF" ] && [ -z "$PORT" ]; then
-  PORT=$(sed -n 's/^PORT=//p' "$CONF" | sed 's/#.*//; s/[[:space:]]//g' | head -1)
+OLDPORT=""
+if [ -f "$CONF" ]; then
+  OLDPORT=$(sed -n 's/^PORT=//p' "$CONF" | sed 's/#.*//; s/[[:space:]]//g' | head -1)
 fi
+[ -z "$PORT" ] && [ -z "$REALLOC" ] && PORT="$OLDPORT"
+
 if [ -z "$PORT" ]; then
+  # 已被别的客户端登记的，以及此刻真的在监听的，都跳过。
+  # 重新分配时要把自己那条排除掉，否则会原地打转选回同一个端口。
   USED=$(grep -h '^PORT=' /root/.winbridge/clients/*.conf 2>/dev/null \
          | cut -d= -f2 | sed 's/#.*//; s/[[:space:]]//g' | grep -E '^[0-9]+$')
+  [ -n "$REALLOC" ] && [ -n "$OLDPORT" ] && USED=$(echo "$USED" | grep -vx "$OLDPORT")
   PORT=2222
   while echo "$USED" | grep -qx "$PORT" || ss -tln 2>/dev/null | grep -q ":$PORT "; do
     PORT=$((PORT + 1))
+    [ "$PORT" -gt 2299 ] && { echo "ERR|2222-2299 全被占用，无法分配端口"; exit 1; }
   done
+  [ -n "$REALLOC" ] && [ -n "$OLDPORT" ] && [ "$PORT" != "$OLDPORT" ] &&
+    echo "NOTE|端口 $OLDPORT 已被占用，改分配 $PORT"
 fi
 
 [ -z "$TOOL" ] && case "$OS" in
