@@ -21,4 +21,25 @@ check_one() {
   )
 }
 if [ "$1" = "-c" ]; then check_one "$FERRY_HOME/clients/$2.conf"
-else for f in "$FERRY_HOME"/clients/*.conf; do check_one "$f"; done; fi
+else
+  for f in "$FERRY_HOME"/clients/*.conf; do check_one "$f"; done
+  # 管理员视角：独立角色的客户端档案在各自家目录，root 这边扫不到，单独列。
+  # 它们的挂载受 FUSE 保护，root 直接 ls 会被拒 —— 要看内容用 bridge-as。
+  if [ "$(id -u)" = 0 ] && getent group ferry >/dev/null 2>&1; then
+    FGID=$(getent group ferry | cut -d: -f3)
+    # 主组成员不出现在 /etc/group 的成员列里（useradd -g ferry 设的正是主组），
+    # 所以要按 GID 扫 passwd，再并上补充组成员
+    ROLES=$(printf '%s\n%s\n' \
+            "$(getent passwd | awk -F: -v g="$FGID" '$4==g{print $1}')" \
+            "$(getent group ferry | cut -d: -f4 | tr ',' '\n')" | grep -v '^$' | sort -u)
+    first=1
+    for u in $ROLES; do
+      h=$(getent passwd "$u" | cut -d: -f6); [ -d "$h" ] || continue
+      [ "$first" = 1 ] && { echo; echo "══ 独立角色（挂载在各自家目录，用 bridge-as 查看）══"; first=0; }
+      n=$(awk -v p="$h/mnt/" '$3=="fuse.sshfs" && index($2,p)==1' /proc/mounts | wc -l)
+      pipe=$(awk -v p="$h/.winbridge/status/" '$3=="fuse.sshfs" && index($2,p)==1' /proc/mounts | wc -l)
+      printf "  %-22s 挂载 %-3s 状态管道 %s\n" "$u" "$n" \
+             "$([ "$pipe" -gt 0 ] && echo ✅ || echo ⚠️ 未挂载)"
+    done
+  fi
+fi
