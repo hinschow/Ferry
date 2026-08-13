@@ -34,7 +34,17 @@ if [ "$MP" != "$STATUS_DIR" ]; then
   esac
 fi
 
-mountpoint -q "$MP" && { echo "ALREADY|$MP"; exit 0; }
+# 已经挂着的：补一条登记再返回。
+# 从老版本升上来时，之前挂的自选位置不在登记表里，状态里就看不到它 ——
+# 早先这里直接 exit，用户再怎么点「挂载」也补不上，只能卸载重挂。
+if mountpoint -q "$MP"; then
+  case "$MP" in
+    "$MNT_ROOT"/*|"$STATUS_DIR") ;;          # 默认位置靠前缀就能认出，不必登记
+    *) bridge_reg_add "$MP" "$LPATH" keep ;;
+  esac
+  echo "ALREADY|$MP"
+  exit 0
+fi
 
 OWN=keep
 if [ -e "$MP" ]; then

@@ -119,6 +119,20 @@ for p in win-run:bridge-run win-check:bridge-check win-mounts:bridge-mounts \
 done
 echo "    已安装 $N 个 bridge-* 命令（含 win-* 兼容软链）"
 
+# 跑着的状态守护还是老代码 —— 不重启的话装完等于没装，
+# 用户会看到「升级了但行为一点没变」。
+RESTARTED=""
+for pidf in /root/.winbridge/statusd-*.pid; do
+  [ -f "$pidf" ] || continue
+  c=$(basename "$pidf" .pid); c=${c#statusd-}
+  if kill -0 "$(cat "$pidf" 2>/dev/null)" 2>/dev/null; then
+    bridge-statusd stop -c "$c" >/dev/null 2>&1
+    bridge-statusd start -c "$c" >/dev/null 2>&1
+    RESTARTED="$RESTARTED $c"
+  fi
+done
+[ -n "$RESTARTED" ] && echo "    已用新代码重启状态守护：$RESTARTED"
+
 SRV=$(curl -s -m 5 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
 HOSTN=$(hostname)
 
