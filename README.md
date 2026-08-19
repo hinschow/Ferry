@@ -299,7 +299,7 @@ sudo systemsetup -setremotelogin off   # macOS
 | 挂载目录报 I/O error | 隧道断了。点「启动隧道」；恢复后 sshfs 会自动重连 |
 | 挂载时报「已存在且非空」 | 换个空目录或还不存在的路径。挂在非空目录上会把原内容整个盖住，所以直接拦掉 |
 | 挂载时报「是系统目录」 | `/etc` `/usr` `/var` 这些不能当挂载点。放 `/root/mnt/...` 或自己新建的目录 |
-| Windows 上 `Ferry.exe` 被杀毒软件拦 | PyInstaller 打的包常被误报。加白名单，或直接用 `Ferry.lnk` / `start-windows.bat` |
+| Windows 上 `Ferry.exe` 被杀毒软件拦 | 未签名的 Electron 包常被误报。加白名单，或改用 `python ferry_agent.py --open` 走浏览器 |
 | Mac 上 `Ferry.app` 提示「已损坏」 | 隔离标记：`xattr -dr com.apple.quarantine Ferry.app` |
 | `remote port forwarding failed` | 服务器上那个端口被占。多半是上一条隧道的僵死会话还没释放 —— 控制台连续两次冲突会自动换端口；想立刻清掉在服务器上跑 `bridge-port-clean -c <机器>`（活着的隧道不会被动） |
 | 服务器命令卡住不返回 | SSH 复用连接坏了，`bridge-reset` |

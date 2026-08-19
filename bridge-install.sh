@@ -192,10 +192,12 @@ $(cat /root/.ssh/id_bridge.pub)
 
   git clone https://github.com/hinschow/Ferry.git ~/Ferry && cd ~/Ferry
 
-  Windows：powershell -ExecutionPolicy Bypass -File build-windows-exe.ps1
-           构建出 Ferry.exe，双击运行（不想构建就双击 start-windows.bat）
-  macOS  ：bash make-mac-app.sh 生成 Ferry.app，双击运行
-           （需要 Tk 8.6+：brew install python-tk）
+  最省事：python3 ferry_agent.py --open      浏览器打开就是完整界面，零构建
+
+  想要原生窗口和托盘图标：
+    cd electron && npm install && npm run build
+    然后双击 _electron/Ferry-win32-x64/Ferry.exe（macOS 是 Ferry.app）
+    预编译的包也可以从 Releases 下载
 
   本机的 SSH 服务要开着，服务器靠它回连：
   Windows 管理员 PowerShell：

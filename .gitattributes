@@ -4,7 +4,6 @@
 # 服务器端脚本必须是 LF —— CRLF 会让 Linux 报 "bad interpreter: /bin/bash^M"
 server/*        text eol=lf
 *.sh            text eol=lf
-start-mac.command text eol=lf
 bridge-install.sh text eol=lf
 
 # Windows 专用，必须 CRLF
@@ -14,3 +13,8 @@ bridge-install.sh text eol=lf
 # 二进制
 *.png binary
 *.zip binary
+
+# Electron / 网页界面
+*.js   text eol=lf
+*.css  text eol=lf
+*.html text eol=lf
