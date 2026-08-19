@@ -1,0 +1,72 @@
+#!/bin/bash
+# bridge-pause [-c 客户端] [秒]        暂时卸掉数据挂载，N 秒后自动挂回（默认 90）
+# bridge-pause --resume [-c 客户端]    手动恢复
+#
+# 为什么需要它：会话恢复时扩展会把对话里引用过的每个文件冷 stat 一遍。
+# 文件在 sshfs 挂载上时每次 ~440ms（连已删除的文件也要付一次完整往返），
+# 几百个文件就超过加载的 60 秒限制 —— 表现为「标签页自动关闭，会话打不开」。
+# 预热缓存救不了：attr_timeout=15s / negative_timeout=5s，预热完就过期了。
+#
+# 挂载不在时这些路径是本地 ENOENT（微秒级），恢复瞬间完成；文件会显示
+# 「缺失」，挂回来之后下次访问自动恢复正常。
+#
+# ⚠️ 暂停期间所有会话都读不到该机器的挂载 —— 只在重开会话前用，窗口给短点。
+. /usr/local/lib/ferry/lib.sh
+
+RESUME=""
+if [ "$1" = "--resume" ]; then RESUME=1; shift; fi
+bridge_resolve_client "$@" || exit 1
+[ $BRIDGE_SHIFT -gt 0 ] && shift $BRIDGE_SHIFT
+SECS="${1:-90}"
+SAVED="$FERRY_HOME/paused-$CLIENT.tsv"
+
+remount_all() {
+  [ -f "$SAVED" ] || { echo "没有待恢复的挂载"; return 0; }
+  local n=0
+  while IFS=$'\t' read -r mp lpath; do
+    [ -z "$mp" ] && continue
+    OUT=$(bridge-mount -c "$CLIENT" "$lpath" "$mp" 2>&1 | tail -1)
+    case "$OUT" in OK*|ALREADY*) n=$((n+1)) ;; *) echo "  ⚠️ $mp 恢复失败: $OUT" ;; esac
+  done < "$SAVED"
+  rm -f "$SAVED"
+  echo "✅ 已恢复 $n 个挂载"
+}
+
+if [ -n "$RESUME" ]; then remount_all; exit 0; fi
+[ -f "$SAVED" ] && { echo "上次的暂停还没恢复，先补上："; remount_all; }
+
+# 找出该客户端的数据挂载（状态管道留着，statusd 和客户端界面靠它）
+: > "$SAVED.tmp"
+while IFS=$'\t' read -r mp src; do
+  [ "$mp" = "$STATUS_DIR" ] && continue
+  # 反推本地路径：登记表优先，否则从 sshfs 源串还原（/D:/a/b → D:\a\b）
+  lpath=$(awk -F'\t' -v m="$mp" '$1==m{print $2}' "$(bridge_reg_file)" 2>/dev/null | head -1)
+  if [ -z "$lpath" ]; then
+    p="${src#*:}"
+    case "$OS" in
+      windows) lpath=$(printf '%s' "${p#/}" | tr '/' '\\') ;;
+      *)       lpath="$p" ;;
+    esac
+  fi
+  printf '%s\t%s\n' "$mp" "$lpath" >> "$SAVED.tmp"
+done < <(bridge-mounts -c "$CLIENT")
+
+[ -s "$SAVED.tmp" ] || { rm -f "$SAVED.tmp"; echo "该客户端没有数据挂载，无需暂停"; exit 0; }
+mv "$SAVED.tmp" "$SAVED"
+
+trap 'echo; echo "被打断，先恢复挂载…"; remount_all; exit 130' INT TERM
+
+N=0
+while IFS=$'\t' read -r mp _; do
+  fusermount3 -u "$mp" 2>/dev/null || fusermount -u "$mp" 2>/dev/null
+  if mountpoint -q "$mp"; then
+    # 有进程占着就懒卸载：立即从命名空间摘掉（新访问=本地 ENOENT），旧句柄不受影响
+    fusermount3 -uz "$mp" 2>/dev/null || fusermount -uz "$mp" 2>/dev/null
+  fi
+  mountpoint -q "$mp" && echo "  ⚠️ $mp 卸不掉" || N=$((N+1))
+done < "$SAVED"
+
+echo "✅ 已暂停 $N 个挂载 —— 现在去重开会话（这些路径此刻是本地 ENOENT，恢复只要几秒）"
+echo "   $SECS 秒后自动挂回；提前恢复： bridge-pause --resume -c $CLIENT"
+sleep "$SECS"
+remount_all
