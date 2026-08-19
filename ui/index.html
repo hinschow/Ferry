@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ferry 桥接控制台</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<nav id="side">
+  <div class="brand"><b>Ferry</b><span>桥接控制台</span></div>
+  <div class="sec">服务器<button id="add-srv">＋ 添加</button></div>
+  <div id="srvlist"></div>
+</nav>
+
+<div id="main">
+  <header id="top">
+    <div class="pill"><span class="dot" id="sshd-dot"></span>本机 SSH <b id="sshd-txt">—</b>
+      <button class="mini" id="sshd-start" style="display:none">启动</button></div>
+    <div class="grow"></div>
+    <button class="lnk danger" id="panic">紧急断开</button>
+  </header>
+
+  <div id="body">
+    <h2>挂载目录 <em id="mount-of"></em><span class="grow"></span></h2>
+    <div class="card" id="mounts"></div>
+  </div>
+
+  <div id="logwrap">
+    <div id="logbar"><span id="log-caret">▾</span> 运行日志<span class="grow"></span>
+      <span id="uptime"></span></div>
+    <div id="log"></div>
+  </div>
+</div>
+
+<div id="mask"><div class="modal" id="modal"></div></div>
+
+<svg style="display:none">
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2z"/></symbol>
+  <symbol id="i-server" viewBox="0 0 24 24"><path d="M4 4h16a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zm0 9h16a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-5a1 1 0 0 1 1-1zm2.5 2.5a1 1 0 1 0 0 2 1 1 0 0 0 0-2zm0-9a1 1 0 1 0 0 2 1 1 0 0 0 0-2z"/></symbol>
+</svg>
+
+<script src="app.js"></script>
+</body>
+</html>

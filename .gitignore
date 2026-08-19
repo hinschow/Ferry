@@ -23,3 +23,6 @@ Ferry.app/
 _build/
 _dist/
 _ferry_launcher.py
+.agent-url
+_electron/
+electron/node_modules/
