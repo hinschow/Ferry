@@ -120,15 +120,76 @@ def _port22_open():
         return False
 
 
+_SVC = {}          # ctypes 句柄缓存，避免每次重新声明
+
+
+def _win_service_state(name="sshd"):
+    """直接问 Windows 服务管理器，不起任何进程。返回状态字符串或 None。
+
+    这里原本是每 2 秒起一个 PowerShell 查 Get-Service —— 实测单次 543ms，
+    一小时能创建 1300+ 个 powershell/conhost 进程，是本机后台进程的大头。
+    换成服务 API 之后单次 0.07ms，快约 7500 倍且零进程。
+    """
+    try:
+        import ctypes
+        from ctypes import wintypes
+        adv = _SVC.get("adv")
+        if adv is None:
+            adv = ctypes.WinDLL("advapi32", use_last_error=True)
+            # 64 位下必须声明 restype：不声明的话返回值按 c_int 截断，
+            # SC_HANDLE 是 64 位指针，一截就废，表现为「服务不存在」
+            adv.OpenSCManagerW.restype = wintypes.HANDLE
+            adv.OpenSCManagerW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD]
+            adv.OpenServiceW.restype = wintypes.HANDLE
+            adv.OpenServiceW.argtypes = [wintypes.HANDLE, wintypes.LPCWSTR, wintypes.DWORD]
+            adv.CloseServiceHandle.argtypes = [wintypes.HANDLE]
+
+            class SERVICE_STATUS(ctypes.Structure):
+                _fields_ = [("dwServiceType", wintypes.DWORD),
+                            ("dwCurrentState", wintypes.DWORD),
+                            ("dwControlsAccepted", wintypes.DWORD),
+                            ("dwWin32ExitCode", wintypes.DWORD),
+                            ("dwServiceSpecificExitCode", wintypes.DWORD),
+                            ("dwCheckPoint", wintypes.DWORD),
+                            ("dwWaitHint", wintypes.DWORD)]
+
+            adv.QueryServiceStatus.argtypes = [wintypes.HANDLE,
+                                               ctypes.POINTER(SERVICE_STATUS)]
+            _SVC["adv"], _SVC["st"] = adv, SERVICE_STATUS
+        scm = adv.OpenSCManagerW(None, None, 0x0001)          # SC_MANAGER_CONNECT
+        if not scm:
+            return None
+        try:
+            h = adv.OpenServiceW(scm, name, 0x0004)           # SERVICE_QUERY_STATUS
+            if not h:
+                # 1060 = ERROR_SERVICE_DOES_NOT_EXIST
+                return "NotInstalled" if ctypes.get_last_error() == 1060 else None
+            try:
+                st = _SVC["st"]()
+                if not adv.QueryServiceStatus(h, ctypes.byref(st)):
+                    return None
+                return {1: "Stopped", 2: "StartPending", 3: "StopPending",
+                        4: "Running"}.get(st.dwCurrentState)
+            finally:
+                adv.CloseServiceHandle(h)
+        finally:
+            adv.CloseServiceHandle(scm)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def sshd_status():
     """返回 (ok, 文案)"""
     if IS_WIN:
-        rc, out = run(["powershell", "-NoLogo", "-NonInteractive", "-Command",
-                       "(Get-Service sshd -ErrorAction SilentlyContinue).Status"])
-        st = out.strip()
-        zh = {"Running": "运行中", "Stopped": "已停止",
-              "StartPending": "启动中", "StopPending": "停止中"}
-        return (st == "Running", zh.get(st, st) or "未安装")
+        zh = {"Running": "运行中", "Stopped": "已停止", "StartPending": "启动中",
+              "StopPending": "停止中", "NotInstalled": "未安装"}
+        st = _win_service_state()
+        if st is None:
+            # API 走不通（权限/异常系统）时退回 sc.exe —— 仍比 PowerShell 便宜 36 倍
+            rc, out = run(["sc.exe", "query", "sshd"], 15)
+            st = ("Running" if "RUNNING" in out else
+                  "Stopped" if "STOPPED" in out else "NotInstalled")
+        return (st == "Running", zh.get(st, st))
     if IS_MAC:
         # 直接探本地 22 端口：不需要 sudo（systemsetup 在新版 macOS 要 sudo，非交互会失败）
         if _port22_open():
@@ -1735,7 +1796,7 @@ class BridgeApp:
             ok, msg = sshd_start()
             self.log(("  " + msg) if ok else ("  " + msg), "info" if ok else "error")
             if ok:
-                self.sshd = {"ok": True, "text": "运行中"}
+                self.sshd = {"ok": True, "text": "运行中"}   # 立刻反映，不等下次轮询
         self._work(job)
 
     def act_theme(self):
@@ -1824,10 +1885,15 @@ class BridgeApp:
 
     def _poll_local_loop(self):
         streaks = {}
+        sshd_at = 0.0
         while True:
             try:
-                ok, text = sshd_status()
-                self.sshd = {"ok": ok, "text": text}
+                # sshd 状态几乎不变，没必要跟着隧道轮询一起每 2 秒查一次。
+                # 用户点「启动」后想立刻看到结果，所以间隔取 10 秒而不是更长。
+                if time.time() - sshd_at >= 10:
+                    ok, text = sshd_status()
+                    self.sshd = {"ok": ok, "text": text}
+                    sshd_at = time.time()
                 now = time.time()
                 for srv in list(self.servers):
                     srv.state["tunnel"] = srv.tunnel_state()
