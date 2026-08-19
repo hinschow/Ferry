@@ -2,9 +2,9 @@
 # -*- coding: utf-8 -*-
 """生成 Ferry 的应用图标 —— 只用标准库，不依赖 Pillow。
 
-    python3 tools/make-icons.py [输出目录]
+    python3 client/assets/make-icons.py [输出目录]
 
-产出 assets/ferry.png / ferry.ico / ferry.icns。
+产出同目录的 ferry.png / ferry.ico / ferry.icns。
 图案：蓝色圆角方块上一座白色的桥（两个桥墩 + 拱 + 桥面），
 16px 下也还认得出是桥。4 倍超采样做抗锯齿。
 """
@@ -145,8 +145,7 @@ def icns(entries):
 
 
 def main():
-    out_dir = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets")
+    out_dir = sys.argv[1] if len(sys.argv) > 1 else os.path.dirname(os.path.abspath(__file__))
     os.makedirs(out_dir, exist_ok=True)
 
     cache = {}

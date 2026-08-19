@@ -1,13 +1,13 @@
 解压后双击 **Ferry.exe**（Windows）即可。
 
 客户端是 Electron 外壳 + Python agent：界面走本地 HTTP，逻辑全在
-`ferry_core.py`。**这台机器需要装 Python 3**（agent 用它跑）。
+`client/ferry_core.py`。**这台机器需要装 Python 3**（agent 用它跑）。
 
 **接入服务器**：先在服务器上装工具（`git clone` 后 `bash bridge-install.sh`），
 再执行 `bridge-invite --name <机器名>` 发一张接入码，客户端左栏「＋ 添加」
 粘贴即可。完整说明见 README。
 
-不想用 Electron 也行：`python ferry_agent.py --open`，浏览器打开就是同一个界面。
+不想用 Electron 也行：`cd client && python ferry_agent.py --open`，浏览器打开就是同一个界面。
 
 ### 已知提示
 

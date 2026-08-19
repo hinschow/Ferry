@@ -32,7 +32,7 @@ jobs:
       # 和本地 npm run build 用的是同一条命令，避免 CI 和手工构建各跑各的
       - name: 安装依赖并构建
         shell: pwsh
-        working-directory: electron
+        working-directory: client/electron
         run: |
           npm ci --no-audit --no-fund
           npm run build
@@ -42,8 +42,8 @@ jobs:
       - name: 组装发布包
         shell: pwsh
         run: |
-          Copy-Item setup-windows.ps1, README.md _electron\Ferry-win32-x64
-          Compress-Archive -Path _electron\Ferry-win32-x64 -DestinationPath Ferry-windows-x64.zip
+          Copy-Item client\setup-windows.ps1, README.md client\_electron\Ferry-win32-x64
+          Compress-Archive -Path client\_electron\Ferry-win32-x64 -DestinationPath Ferry-windows-x64.zip
 
       - uses: actions/upload-artifact@v4
         with:
@@ -60,7 +60,7 @@ jobs:
           node-version: "20"
 
       - name: 安装依赖并构建
-        working-directory: electron
+        working-directory: client/electron
         run: |
           npm ci --no-audit --no-fund
           npx electron-packager . Ferry --overwrite --platform=darwin --arch=universal \
@@ -70,9 +70,9 @@ jobs:
 
       - name: 组装发布包
         run: |
-          cp setup-mac.sh README.md _electron/Ferry-darwin-universal/
+          cp client/setup-mac.sh README.md client/_electron/Ferry-darwin-universal/
           # 用 ditto 而不是 zip：.app 里的可执行位要保住，否则解压出来点不开
-          ditto -c -k --sequesterRsrc --keepParent _electron/Ferry-darwin-universal Ferry-macos.zip
+          ditto -c -k --sequesterRsrc --keepParent client/_electron/Ferry-darwin-universal Ferry-macos.zip
 
       - uses: actions/upload-artifact@v4
         with:

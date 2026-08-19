@@ -45,7 +45,7 @@ cat <<TIPEOF
 TIPEOF
 if [ "$OS" = "windows" ]; then
 cat <<TIPEOF
-  1) git clone https://github.com/hinschow/Ferry.git，跑 setup-windows.ps1
+  1) git clone https://github.com/hinschow/Ferry.git，跑 client/setup-windows.ps1
   2) 管理员 PowerShell:
      powershell -ExecutionPolicy Bypass -File setup-windows.ps1 \\
        -PubKey "$PUB" \\
@@ -54,11 +54,11 @@ cat <<TIPEOF
 TIPEOF
 else
 cat <<TIPEOF
-  1) git clone https://github.com/hinschow/Ferry.git，跑 setup-mac.sh
+  1) git clone https://github.com/hinschow/Ferry.git，跑 client/setup-mac.sh
   2) 终端:
      bash setup-mac.sh --pubkey "$PUB" \\
        --host $SRV --alias $NAME --port $PORT --autostart
-  3) python3 ferry_agent.py --open → 「＋ 添加」→ SSH 别名填 $NAME
+  3) cd client && python3 ferry_agent.py --open → 「＋ 添加」→ SSH 别名填 $NAME
 TIPEOF
 fi
 cat <<TIPEOF

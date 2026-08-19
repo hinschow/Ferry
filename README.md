@@ -131,7 +131,7 @@ bridge-invite --name win --root
 **命令行一键**（在**本地电脑**的终端里跑，上面三步全包）
 
 ```bash
-python3 ferry-setup.py root@服务器IP
+（已移除，用接入码流程）
 ```
 
 它一口气做完：装服务器端工具 → 把服务器公钥授权到本机 → 写好 `~/.ssh/config`
@@ -148,10 +148,10 @@ git clone https://github.com/hinschow/Ferry.git ~/Ferry
 cd ~/Ferry && bash bridge-install.sh
 
 # ② Windows，管理员 PowerShell，一整行
-powershell -ExecutionPolicy Bypass -File setup-windows.ps1 -PubKey "上一步的公钥" -ServerHost <IP> -Alias <别名> -LoopbackOnly -AutoStart
+powershell -ExecutionPolicy Bypass -File client/setup-windows.ps1 -PubKey "上一步的公钥" -ServerHost <IP> -Alias <别名> -LoopbackOnly -AutoStart
 
 # ③ macOS
-bash setup-mac.sh --pubkey "上一步的公钥" --host <IP> --alias <别名> --autostart
+bash client/setup-mac.sh --pubkey "上一步的公钥" --host <IP> --alias <别名> --autostart
 ```
 
 然后打开控制台 →「＋ 添加」→ 选「否（手工填写）」→ SSH 别名填上面的 `<别名>`。
@@ -167,6 +167,7 @@ bash setup-mac.sh --pubkey "上一步的公钥" --host <IP> --alias <别名> --a
 ### 最省事：直接用浏览器
 
 ```bash
+cd client
 python ferry_agent.py --open
 ```
 
@@ -175,10 +176,10 @@ python ferry_agent.py --open
 ### 要原生窗口和托盘图标
 
 ```bash
-cd electron
+cd client/electron
 npm install          # 约 100 MB
 npm start            # 开发时直接跑
-npm run build        # 打包成 _electron/Ferry-win32-x64/Ferry.exe
+npm run build        # 打包成 client/_electron/Ferry-win32-x64/Ferry.exe
 ```
 
 打出来的包约 270 MB（Electron 的体量），**仍然需要机器上有 Python 3** ——
@@ -299,7 +300,7 @@ sudo systemsetup -setremotelogin off   # macOS
 | 挂载目录报 I/O error | 隧道断了。点「启动隧道」；恢复后 sshfs 会自动重连 |
 | 挂载时报「已存在且非空」 | 换个空目录或还不存在的路径。挂在非空目录上会把原内容整个盖住，所以直接拦掉 |
 | 挂载时报「是系统目录」 | `/etc` `/usr` `/var` 这些不能当挂载点。放 `/root/mnt/...` 或自己新建的目录 |
-| Windows 上 `Ferry.exe` 被杀毒软件拦 | 未签名的 Electron 包常被误报。加白名单，或改用 `python ferry_agent.py --open` 走浏览器 |
+| Windows 上 `Ferry.exe` 被杀毒软件拦 | 未签名的 Electron 包常被误报。加白名单，或改用 `cd client && python ferry_agent.py --open` 走浏览器 |
 | Mac 上 `Ferry.app` 提示「已损坏」 | 隔离标记：`xattr -dr com.apple.quarantine Ferry.app` |
 | `remote port forwarding failed` | 服务器上那个端口被占。多半是上一条隧道的僵死会话还没释放 —— 控制台连续两次冲突会自动换端口；想立刻清掉在服务器上跑 `bridge-port-clean -c <机器>`（活着的隧道不会被动） |
 | 服务器命令卡住不返回 | SSH 复用连接坏了，`bridge-reset` |
@@ -316,20 +317,24 @@ sudo systemsetup -setremotelogin off   # macOS
 分发包（可直接拷给别人，不含任何个人数据）：
 
 ```
-ferry_core.py                 核心逻辑（隧道/挂载/接入码/平台差异）
-ferry_agent.py                本地 HTTP agent，把核心暴露成 JSON API
-ui/                           网页界面（html + css + js）
-electron/                     Electron 外壳（main.js + package.json）
-bridge-install.sh             服务器端安装（从 server/ 拷贝）
-ferry-setup.py                本地一条命令全自动接入（可选路径）
-setup-windows.ps1             Windows：装 sshd + 收紧到回环 + 建快捷方式
-setup-mac.sh                  macOS：同上
-assets/ferry.png|.ico|.icns   应用图标
-tools/make-icons.py           重新生成图标（纯标准库）
-server/                       服务器端工具源码（唯一来源，改完直接生效）
-.github/workflows/            打 tag 自动构建并发布
 README.md                     本文件
+bridge-install.sh             服务器端安装（在服务器上跑这个）
+server/                       它装的 20 个 bridge-* 工具，唯一来源
+
+client/                       本机上跑的全部
+  ferry_core.py                 核心逻辑：隧道/挂载/接入码/平台差异
+  ferry_agent.py                本地 HTTP agent，把核心暴露成 JSON API
+  ui/                           网页界面（html + css + js）
+  electron/                     Electron 外壳（main.js + package.json）
+  setup-windows.ps1             装 sshd + 收紧到回环 + 建快捷方式
+  setup-mac.sh                  同上，macOS
+  assets/                       图标 + make-icons.py（纯标准库生成）
+
+.github/workflows/            打 tag 自动构建并发布
 ```
+
+按「在哪台机器上跑」分层：根目录那个 `bridge-install.sh` 和 `server/` 是服务器端，
+`client/` 里的东西全部在你自己电脑上跑。
 
 运行后会自动生成（**这些是本机专属的，拷给别人前要删掉**）：
 

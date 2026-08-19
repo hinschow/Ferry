@@ -192,11 +192,11 @@ $(cat /root/.ssh/id_bridge.pub)
 
   git clone https://github.com/hinschow/Ferry.git ~/Ferry && cd ~/Ferry
 
-  最省事：python3 ferry_agent.py --open      浏览器打开就是完整界面，零构建
+  最省事：cd client && python3 ferry_agent.py --open   浏览器打开就是完整界面，零构建
 
   想要原生窗口和托盘图标：
-    cd electron && npm install && npm run build
-    然后双击 _electron/Ferry-win32-x64/Ferry.exe（macOS 是 Ferry.app）
+    cd client/electron && npm install && npm run build
+    然后双击 client/_electron/Ferry-win32-x64/Ferry.exe（macOS 是 Ferry.app）
     预编译的包也可以从 Releases 下载
 
   本机的 SSH 服务要开着，服务器靠它回连：
@@ -223,8 +223,8 @@ $(cat /root/.ssh/id_bridge.pub)
 
 【不想用接入码？】本服务器公钥就是上面那行，可以手工配：
 
-  Windows：powershell -ExecutionPolicy Bypass -File setup-windows.ps1 -PubKey "上面那行公钥" -ServerHost $SRV -Alias $HOSTN -LoopbackOnly -AutoStart
-  macOS  ：bash setup-mac.sh --pubkey "上面那行公钥" --host $SRV --alias $HOSTN --autostart
+  Windows：powershell -ExecutionPolicy Bypass -File client/setup-windows.ps1 -PubKey "上面那行公钥" -ServerHost $SRV -Alias $HOSTN -LoopbackOnly -AutoStart
+  macOS  ：bash client/setup-mac.sh --pubkey "上面那行公钥" --host $SRV --alias $HOSTN --autostart
 
   若还要指定连本服务器用的私钥，加 -Identity / --identity（填【私钥】路径，不带 .pub）。
 
