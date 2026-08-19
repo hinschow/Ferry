@@ -11,6 +11,7 @@
   },
   "scripts": {
     "start": "electron .",
-    "build": "electron-packager . Ferry --platform=win32 --arch=x64 --icon=../assets/ferry.ico --out=../_electron --overwrite"
+    "build": "electron-packager . Ferry --overwrite --platform=win32 --arch=x64 --icon=../assets/ferry.ico --out=../_electron --extra-resource=../ferry_core.py --extra-resource=../ferry_agent.py --extra-resource=../ui --extra-resource=../assets --ignore=node_modules/electron$ --ignore=node_modules/@electron",
+    "build:mac": "electron-packager . Ferry --overwrite --platform=darwin --arch=x64 --icon=../assets/ferry.icns --out=../_electron --extra-resource=../ferry_core.py --extra-resource=../ferry_agent.py --extra-resource=../ui --extra-resource=../assets --ignore=node_modules/electron$ --ignore=node_modules/@electron"
   }
 }

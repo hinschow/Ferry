@@ -10,7 +10,9 @@ const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
-const ROOT = path.join(__dirname, '..');            // 仓库根，agent 和 ui 都在这
+// 开发时 agent 和 ui 在上一层；打包后它们作为 extra-resource 放在
+// resources/ 下（和 aTimes 把 atimes-agent.exe 放 resources/bin 一个道理）。
+const ROOT = () => (app.isPackaged ? process.resourcesPath : path.join(__dirname, '..'));
 let agent = null, win = null, tray = null, agentUrl = '';
 
 function pickPython() {
@@ -24,8 +26,8 @@ function pickPython() {
 function startAgent() {
   return new Promise((resolve, reject) => {
     const py = pickPython();
-    agent = spawn(py, [path.join(ROOT, 'ferry_agent.py')], {
-      cwd: ROOT, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+    agent = spawn(py, [path.join(ROOT(), 'ferry_agent.py')], {
+      cwd: ROOT(), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
     });
     let buf = '';
     const timer = setTimeout(() => reject(new Error('agent 启动超时（15 秒）')), 15000);
@@ -48,7 +50,7 @@ function createWindow(url) {
     width: 1180, height: 780, minWidth: 900, minHeight: 560,
     backgroundColor: '#23262d',          // 和界面底色一致，避免开窗白闪
     autoHideMenuBar: true,
-    icon: path.join(ROOT, 'assets', 'ferry.png'),
+    icon: path.join(ROOT(), 'assets', 'ferry.png'),
     webPreferences: { nodeIntegration: false, contextIsolation: true },
   });
   win.loadURL(url);
@@ -64,7 +66,7 @@ function createWindow(url) {
 }
 
 function createTray() {
-  const p = path.join(ROOT, 'assets', 'ferry.png');
+  const p = path.join(ROOT(), 'assets', 'ferry.png');
   if (!fs.existsSync(p)) return;
   tray = new Tray(nativeImage.createFromPath(p).resize({ width: 16, height: 16 }));
   tray.setToolTip('Ferry 桥接控制台');
@@ -84,7 +86,7 @@ app.whenReady().then(async () => {
     createTray();
   } catch (e) {
     dialog.showErrorBox('Ferry 启动失败',
-      `${e.message}\n\n请确认这台机器装了 Python 3，且 ferry_agent.py 在：\n${ROOT}`);
+      `${e.message}\n\n请确认这台机器装了 Python 3，且 ferry_agent.py 在：\n${ROOT()}`);
     app.quit();
   }
 });

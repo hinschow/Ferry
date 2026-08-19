@@ -44,6 +44,20 @@ fi
 # 从老版本升上来时，之前挂的自选位置不在登记表里，状态里就看不到它 ——
 # 早先这里直接 exit，用户再怎么点「挂载」也补不上，只能卸载重挂。
 if mountpoint -q "$MP"; then
+  # 挂载点被占着，但源变了（客户端把配置/状态目录挪了位置就会这样）——
+  # 不重挂的话服务器一直读着旧路径，状态永远刷不新。
+  CURSRC=$(awk -v m="$MP" '$2==m && $3=="fuse.sshfs"{print $1}' /proc/mounts | head -1)
+  WANT="$USER@127.0.0.1:$SFTP_PATH"
+  # 只比路径，并且忽略大小写：Windows 用户名 hins/Hins 是同一个人，
+  # 按原样比会天天误判"源变了"，白白重挂一遍。
+  norm() { printf '%s' "${1#*:}" | tr 'A-Z' 'a-z'; }
+  if [ -n "$CURSRC" ] && [ "$(norm "$CURSRC")" != "$(norm "$WANT")" ]; then
+    echo "  源已变更，重新挂载：$CURSRC → $WANT"
+    fusermount3 -u "$MP" 2>/dev/null || fusermount -u "$MP" 2>/dev/null
+    sleep 1
+  fi
+fi
+if mountpoint -q "$MP"; then
   case "$MP" in
     "$MNT_ROOT"/*|"$STATUS_DIR") ;;          # 默认位置靠前缀就能认出，不必登记
     *) bridge_reg_add "$MP" "$LPATH" keep ;;

@@ -23,26 +23,49 @@ APP_NAME = "桥接控制台"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
-def _find_install_dir():
-    r"""配置和状态目录放在哪。
+def user_data_dir():
+    r"""配置和状态目录的正式位置：跟着用户走，不跟着代码走。
 
-    默认就在脚本旁边。但仓库常常是 clone 在安装目录里面的
-    （D:\...\bridge-console\repo\），从 repo 那份启动就会读到一个空配置，
-    界面上表现为"一台服务器都没有"，还看不出为什么 —— 用户实际踩过。
-    所以往上找一层：父目录有 bridge-config.json 就用父目录。
+    早先是放在脚本旁边，打包成 exe 之后就崩了 —— 程序目录每次重新打包
+    都会被整个覆盖，配置自然就没了（用户实际踩过：打开新 exe 显示"还没有
+    服务器"）。而且 Program Files 下通常还不可写。
     """
-    here = BASE_DIR
-    if os.path.exists(os.path.join(here, "bridge-config.json")):
-        return here
-    up = os.path.dirname(here)
-    if up and up != here and os.path.exists(os.path.join(up, "bridge-config.json")):
-        return up
-    return here
+    if IS_WIN:
+        base = os.environ.get("APPDATA") or os.path.expanduser("~")
+        return os.path.join(base, "Ferry")
+    if IS_MAC:
+        return os.path.expanduser("~/Library/Application Support/Ferry")
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    return os.path.join(base, "ferry")
 
 
-INSTALL_DIR = _find_install_dir()
-CFG_PATH = os.path.join(INSTALL_DIR, "bridge-config.json")
-STATUS_ROOT = os.path.join(INSTALL_DIR, "status")
+def _resolve_paths():
+    """定位配置，并把老位置的配置迁过来（只迁一次，不动老文件）。
+
+    查找顺序：用户数据目录 → 脚本旁边 → 上一层（仓库 clone 在安装目录里的情况）。
+    在老位置找到而新位置没有，就复制过去，之后一律以新位置为准。
+    """
+    data = user_data_dir()
+    canonical = os.path.join(data, "bridge-config.json")
+    if os.path.exists(canonical):
+        return data
+    up = os.path.dirname(BASE_DIR)
+    for legacy in (BASE_DIR, up):
+        old_cfg = os.path.join(legacy, "bridge-config.json")
+        if legacy and os.path.exists(old_cfg):
+            try:
+                os.makedirs(data, exist_ok=True)
+                shutil.copy2(old_cfg, canonical)
+                return data
+            except OSError:
+                return legacy          # 迁不过去就还用老位置，别把人卡死
+    try:
+        os.makedirs(data, exist_ok=True)
+    except OSError:
+        return BASE_DIR
+    return data
+
+
 
 DEFAULT_CFG = {
     "servers": [],
@@ -103,6 +126,11 @@ apply_theme("dark")           # 先给个默认，读到配置后再按用户选
 IS_WIN = sys.platform == "win32"
 IS_MAC = sys.platform == "darwin"
 PLATFORM = "windows" if IS_WIN else ("macos" if IS_MAC else "linux")
+
+# 路径解析要用 IS_WIN/IS_MAC 判断平台，所以放在它们之后
+INSTALL_DIR = _resolve_paths()
+CFG_PATH = os.path.join(INSTALL_DIR, "bridge-config.json")
+STATUS_ROOT = os.path.join(INSTALL_DIR, "status")
 
 
 # ================================================================ 平台差异
