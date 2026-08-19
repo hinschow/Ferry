@@ -248,6 +248,8 @@ SSH 别名        myserver      ← 唯一必填（就是上一步的 -Alias）
 | `bridge-git -c 机器 -d 目录 <git参数>` | git 在本机跑 |
 | `bridge-daemon start <名> -c 机器 -d 目录 '<命令>'` | 长驻进程（dev server 等），脱离 SSH 会话存活 |
 | `bridge-daemon log <名> -c 机器` | 看日志 |
+| `bridge-port-clean [-c 机器] [端口]` | 隧道端口被僵死会话占住时清理（需 root）。先探对端有没有 SSH banner，**活着的隧道绝不动** |
+| `bridge-as <名字>` | 以某个角色的身份查看它的挂载（管理员） |
 | `bridge-reset` | SSH 复用连接卡死时清理 |
 
 ---
@@ -315,7 +317,7 @@ sudo systemsetup -setremotelogin off   # macOS
 | Windows 上 `Ferry.exe` 被杀毒软件拦 | PyInstaller 打的包常被误报。加白名单，或直接用 `Ferry.lnk` / `start-windows.bat` |
 | Mac 上 `Ferry.app` 提示「已损坏」 | 隔离标记：`xattr -dr com.apple.quarantine Ferry.app` |
 | `Ferry.app` 双击没反应 | 它靠相对位置找 `bridge_gui.py`。别单独把 .app 拖走，要搬就整个文件夹一起搬 |
-| `remote port forwarding failed` | 端口被占。多半是同一台机器开了两条隧道，先关掉旧的 |
+| `remote port forwarding failed` | 服务器上那个端口被占。多半是上一条隧道的僵死会话还没释放 —— 控制台连续两次冲突会自动换端口；想立刻清掉在服务器上跑 `bridge-port-clean -c <机器>`（活着的隧道不会被动） |
 | 服务器命令卡住不返回 | SSH 复用连接坏了，`bridge-reset` |
 | sshd 启动失败 | `ListenAddress` 必须写在 `Match` 块**之前**；改完先 `sshd -t` 校验 |
 | 隧道通但连不上 sshd | 回环地址要写 `127.0.0.1`，**不能写 `localhost`**（Windows 会解析成 ::1） |

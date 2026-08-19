@@ -101,6 +101,24 @@ if [ -f /root/.winbridge/config ] && grep -qE '^(WIN_USER|WIN_PORT|WIN_PROJECT|T
 fi
 [ "$LEGACY" -gt 0 ] && echo "    清理了 $LEGACY 处老版本残留"
 
+# ---- 让 sshd 自己回收僵死会话 ----
+# 客户端被强杀/断网时，服务器这边的会话收不到 FIN，会一直挂着不放隧道端口。
+# sshd 默认 ClientAliveInterval=0（永不主动探测），这种尸体可能挂几小时。
+# 下次控制台起来要建隧道，就撞上自己的尸体：remote port forwarding failed。
+# 60×3 = 最多 3 分钟回收。ListenAddress 那条坑不适用（这两项在 Match 块外合法）。
+if ! grep -qE '^\s*ClientAliveInterval\s' /etc/ssh/sshd_config 2>/dev/null; then
+  cp /etc/ssh/sshd_config /etc/ssh/sshd_config.ferry.bak
+  printf '\n# Ferry: 回收僵死会话，避免隧道端口被尸体占住\nClientAliveInterval 60\nClientAliveCountMax 3\n' \
+    >> /etc/ssh/sshd_config
+  if sshd -t 2>/dev/null; then
+    systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
+    echo "    已开启 sshd 会话回收（ClientAliveInterval 60 × 3）"
+  else
+    cp /etc/ssh/sshd_config.ferry.bak /etc/ssh/sshd_config
+    echo "    ⚠️ sshd_config 校验失败，已回滚，未改动"
+  fi
+fi
+
 echo "==> 3/4 生成专用密钥"
 if [ -f /root/.ssh/id_bridge ]; then
   echo "    已存在，跳过"

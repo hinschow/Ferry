@@ -1,0 +1,64 @@
+#!/bin/bash
+# bridge-port-clean [-c 客户端] [端口]
+#
+# 隧道端口被占住时用：判断占着它的是不是【死会话】，是就清掉。
+#
+# 常见成因：客户端被强杀 / 直接关机 / 网络断掉，服务器这边的 sshd 会话
+# 没收到 FIN，就一直挂着不放端口。默认 sshd 没开 ClientAliveInterval，
+# 这种僵死会话可能挂很久。等下次控制台起来要建隧道，就撞上自己的尸体。
+#
+# 判活方式：往端口发起 TCP 连接，看有没有 SSH banner 回来。
+#   有 banner  → 转发链路是通的，是活的隧道，绝不动它
+#   没有       → 转发已死，杀掉持有它的 sshd 会话
+. /usr/local/lib/ferry/lib.sh
+bridge_resolve_client "$@" || exit 1
+[ $BRIDGE_SHIFT -gt 0 ] && shift $BRIDGE_SHIFT
+P="${1:-$PORT}"
+[ -z "$P" ] && { echo "ERR|没有端口可清理"; exit 1; }
+
+ss -tln 2>/dev/null | grep -q ":$P " || { echo "OK|端口 $P 本来就空着"; exit 0; }
+
+# 需要 root：非特权用户看不到 socket→pid 的映射，而"杀掉自己名下所有 sshd
+# 会话"会连带掐断用户的 VS Code Remote-SSH，代价太大。角色账户遇到端口冲突
+# 走客户端的自动换端口即可。
+[ "$(id -u)" = 0 ] || {
+  echo "ERR|需要 root（非特权用户拿不到 socket→pid 映射）"
+  echo "  角色账户遇到端口占用不必手工处理：控制台连续两次冲突会自动换端口"
+  exit 1; }
+
+# ---- 判活：能拿到 SSH banner 就说明对端还在
+BANNER=$(timeout 6 bash -c "exec 3<>/dev/tcp/127.0.0.1/$P && head -c 12 <&3" 2>/dev/null)
+case "$BANNER" in
+  SSH-*) echo "ALIVE|端口 $P 上是活的隧道（对端有响应），不动它"; exit 0 ;;
+esac
+
+# ---- 死的：找出持有该端口的 sshd 会话
+PIDS=$(ss -tlnp 2>/dev/null | awk -v p=":$P " '$0 ~ p {print}' | grep -oP 'pid=\K[0-9]+' | sort -u)
+[ -z "$PIDS" ] && { echo "ERR|端口 $P 被占，但查不到进程（可能属于别的用户）"; exit 1; }
+
+ME=$(id -un)
+N=0
+for pid in $PIDS; do
+  OWNER=$(ps -o user= -p "$pid" 2>/dev/null | tr -d ' ')
+  CMD=$(ps -o args= -p "$pid" 2>/dev/null)
+  # 只动 sshd 会话，且必须是自己的（或自己是 root）—— 绝不碰监听主进程
+  case "$CMD" in
+    *"sshd: "*) ;;
+    *) echo "SKIP|$pid 不是 sshd 会话：$CMD"; continue ;;
+  esac
+  case "$CMD" in
+    *"[listener]"*) echo "SKIP|$pid 是 sshd 主监听进程，绝不能杀"; continue ;;
+  esac
+  if [ "$ME" != root ] && [ "$OWNER" != "$ME" ]; then
+    echo "SKIP|$pid 属于 $OWNER，无权清理"; continue
+  fi
+  kill "$pid" 2>/dev/null && N=$((N+1)) && echo "  已终止僵死会话 pid=$pid ($OWNER)"
+done
+
+[ "$N" = 0 ] && { echo "ERR|端口 $P 被占但没能清掉"; exit 1; }
+for i in 1 2 3 4 5; do
+  ss -tln 2>/dev/null | grep -q ":$P " || { echo "OK|端口 $P 已释放"; exit 0; }
+  sleep 1
+done
+echo "ERR|已杀 $N 个会话，但端口 $P 仍未释放"
+exit 1
