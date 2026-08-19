@@ -32,7 +32,10 @@ one() {
                  ' /proc/mounts)
             JSON="{\"ts\":$TS,\"client\":\"$CLIENT\",\"os\":\"$OS\",\"port_ok\":$PORT_OK,\"uptime\":\"$UP\",\"mounts\":[$MJSON]}"
             if [ -d "$SDIR" ]; then
-              ( printf '%s' "$JSON" > "$SDIR/$NAME_F" ) & local p=$!
+              # 先写临时文件再改名：直接截断重写要过隧道（几百毫秒的空窗），
+              # 读者（bridge-check、客户端）撞进去就看到空文件，报「文件异常」
+              ( printf '%s' "$JSON" > "$SDIR/.$NAME_F.tmp" &&
+                mv -f "$SDIR/.$NAME_F.tmp" "$SDIR/$NAME_F" ) & local p=$!
               ( sleep 5; kill $p 2>/dev/null ) & local w=$!
               wait $p 2>/dev/null; kill $w 2>/dev/null
             fi

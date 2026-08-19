@@ -102,3 +102,29 @@ bridge_ports_taken() {  # 列出别人占着的端口（排除自己这台客户
     cut -f3 "$f" 2>/dev/null
   done
 }
+
+# ---------------------------------------------------------------- Claude 知识块
+#
+# 把 Ferry 的使用纪律（挂载别遍历、会话恢复超时怎么救）写进指定用户的
+# ~/.claude/CLAUDE.md —— Claude 会话在任何工作目录都会加载这份用户级记忆。
+# 不装的话，知识只存在于某台服务器的某个文件里，换台机器就归零。
+# 标记块幂等：重装只更新块内内容，用户自己写的部分原样保留。
+bridge_install_claude_block() {   # <家目录> [属主]
+  local home="$1" owner="$2"
+  local src=/usr/local/lib/ferry/claude-md-block.md
+  [ -f "$src" ] || return 0
+  local f="$home/.claude/CLAUDE.md"
+  mkdir -p "$home/.claude" || return 0
+  touch "$f" 2>/dev/null || return 0
+  awk '/<!-- FERRY:BEGIN/{s=1} /<!-- FERRY:END/{s=0;next} !s' "$f" > "$f.tmp"
+  {
+    cat "$f.tmp"
+    [ -s "$f.tmp" ] && echo ""
+    echo "<!-- FERRY:BEGIN 由 bridge-install.sh 维护，勿手改（重装会刷新此块） -->"
+    cat "$src"
+    echo "<!-- FERRY:END -->"
+  } > "$f"
+  rm -f "$f.tmp"
+  [ -n "$owner" ] && chown -R "$owner" "$home/.claude" 2>/dev/null
+  return 0
+}

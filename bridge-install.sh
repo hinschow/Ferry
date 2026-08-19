@@ -136,6 +136,7 @@ fi
 echo "==> 4/4 安装命令行工具"
 install -d -m 0755 /usr/local/lib/ferry
 install -m 0644 "$SRC/lib.sh" /usr/local/lib/ferry/lib.sh
+install -m 0644 "$SRC/claude-md-block.md" /usr/local/lib/ferry/claude-md-block.md
 install -m 0644 "$SRC/index-exclude.txt" /root/.winbridge/index-exclude.txt
 rm -f /root/.winbridge/lib.sh      # 旧位置，已移到 /usr/local/lib/ferry/
 N=0
@@ -165,6 +166,21 @@ for pidf in /root/.winbridge/statusd-*.pid; do
   fi
 done
 [ -n "$RESTARTED" ] && echo "    已用新代码重启状态守护：$RESTARTED"
+
+# Ferry 的使用纪律写进 Claude 的用户级记忆（~/.claude/CLAUDE.md 的标记块）。
+# 会话恢复超时怎么救、挂载为什么不能遍历 —— 这些知识必须跟着安装走，
+# 而不是留在某台服务器的某个文件里，换台机器就没人知道了。
+. /usr/local/lib/ferry/lib.sh
+bridge_install_claude_block "$HOME"
+CN=1
+if getent group ferry >/dev/null 2>&1; then
+  FGID=$(getent group ferry | cut -d: -f3)
+  for u in $(getent passwd | awk -F: -v g="$FGID" '$4==g{print $1}'); do
+    h=$(getent passwd "$u" | cut -d: -f6)
+    [ -d "$h" ] && bridge_install_claude_block "$h" "$u" && CN=$((CN+1))
+  done
+fi
+echo "    Claude 使用纪律已写入 $CN 个账户的 ~/.claude/CLAUDE.md"
 
 SRV=$(curl -s -m 5 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
 HOSTN=$(hostname)

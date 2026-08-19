@@ -15,7 +15,9 @@ check_one() {
     echo "  挂载数量     $n"
     local f="$STATUS_DIR/.bridge-status.json"
     if [ -f "$f" ]; then
-      local ts; ts=$(grep -o '"ts":[0-9]*' "$f" 2>/dev/null | cut -d: -f2)
+      local ts; ts=$(grep -o '"ts":[0-9]*' "$f" 2>/dev/null | cut -d: -f2 | head -1)
+      # 撞上写入空窗（旧版守护是截断重写）就等一拍再读一次
+      [ -z "$ts" ] && { sleep 1; ts=$(grep -o '"ts":[0-9]*' "$f" 2>/dev/null | cut -d: -f2 | head -1); }
       [ -n "$ts" ] && echo "  状态管道     ✅ $(( $(date +%s) - ts ))秒前" || echo "  状态管道     ⚠️ 文件异常"
     else echo "  状态管道     ⚠️ 未挂载（客户端会回退 SSH 探测）"; fi
   )
@@ -42,4 +44,25 @@ else
              "$([ "$pipe" -gt 0 ] && echo ✅ || echo ⚠️ 未挂载)"
     done
   fi
+fi
+
+# ── 会话恢复风险 ──────────────────────────────────────────────
+# 引用了大量挂载文件的会话，重开时每个文件冷 stat ~440ms（已删除的也算），
+# 超过 60 秒加载限制就被杀，表现为「标签页自动关闭、会话打不开」。
+# 在这里主动点名 + 给出救法，用户不需要事先知道这个坑。
+MPS=$(awk '$3=="fuse.sshfs"{gsub(/\\040/," ",$2); print $2}' /proc/mounts | grep -v "/.winbridge/status/")
+if [ -n "$MPS" ] && ls "$HOME"/.claude/projects/*/*.jsonl >/dev/null 2>&1; then
+  FIRST=1
+  for f in "$HOME"/.claude/projects/*/*.jsonl; do
+    [ "$(stat -c%s "$f" 2>/dev/null || echo 0)" -gt 2000000 ] || continue
+    REFS=$(while IFS= read -r mp; do
+             grep -aoE "$(printf '%s' "$mp" | sed 's/[].[^$*\\]/\\&/g')/[^\"[:space:]\\\\]+" "$f" 2>/dev/null
+           done <<< "$MPS" | sort -u | wc -l)
+    [ "$REFS" -ge 100 ] || continue
+    EST=$((REFS * 44 / 100))
+    [ "$FIRST" = 1 ] && { echo; echo "══ 会话恢复风险（重开这些会话会超时被杀）══"; FIRST=0; }
+    printf "  %s…  引用 %s 个挂载文件，冷恢复约 %ss（限制 60s）\n" \
+           "$(basename "$f" .jsonl | cut -c1-8)" "$REFS" "$EST"
+  done
+  [ "$FIRST" = 0 ] && echo "  救法：bridge-pause -c <机器> 120  → 趁窗口重开会话，到点自动挂回"
 fi

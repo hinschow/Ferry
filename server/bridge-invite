@@ -143,6 +143,8 @@ DUPEOF
       ssh-keygen -t ed25519 -f "$AH/.ssh/id_bridge" -N '' -C "ferry@$ACCT" -q
       chown "$ACCT:ferry" "$AH/.ssh/id_bridge" "$AH/.ssh/id_bridge.pub"
     fi
+    # 这个角色跑的 Claude 会话也要知道挂载纪律和会话恢复的救法
+    bridge_install_claude_block "$AH" "$ACCT:ferry"
   fi
   echo "$ACCT" > "$KEYDIR/$NAME.acct"
 fi
