@@ -14,7 +14,7 @@
 ```
                         ┌──────────────── 你的电脑 ────────────────┐
                         │  sshd (只监听 127.0.0.1:22)              │
-                        │  桌面客户端 bridge_gui.py                │
+                        │  Ferry 客户端（Electron + agent）        │
                         └───────────────┬──────────────────────────┘
                                         │ ① 出站 SSH，反向隧道
                                         │    -R 2222:127.0.0.1:22
@@ -160,59 +160,44 @@ bash setup-mac.sh --pubkey "上一步的公钥" --host <IP> --alias <别名> --a
 
 ## 四、启动客户端
 
-| 系统 | 启动方式 |
-|---|---|
-| **Windows** | 双击 **`Ferry.exe`**（`setup-windows.ps1` 也会生成带图标的 `Ferry.lnk`，可右键固定到任务栏） |
-| **macOS** | 双击 **`Ferry.app`**（`setup-mac.sh` 自动生成，可拖进「程序」或 Dock） |
-| 兜底 | `start-windows.bat` / `start-mac.command` / `python3 bridge_gui.py` |
+客户端是 **Electron 外壳 + Python agent**：界面是网页（本地 HTTP），
+隧道/挂载/接入码等全部逻辑在 `ferry_core.py`。这样换界面不必重写平台逻辑，
+而且不装 Electron 也能用。
 
-### 从哪拿 Ferry.exe / Ferry.app
-
-**二进制不在 git 里** —— PyInstaller 产物 11 MB 且几乎不可 delta 压缩，每次
-重新构建都是一个全新 blob 永久留在历史里（改 10 次就是 115 MB，而整个仓库
-现在才 250 KB）。它们放在 **[Releases](../../releases)**：打一个 `v*` 标签，
-GitHub Actions 会在 windows / macOS runner 上各构建一份，连同 `bridge_gui.py`
-和图标打包成开箱即用的 zip。
+### 最省事：直接用浏览器
 
 ```bash
-git tag v1.0.0 && git push origin v1.0.0     # 触发构建与发布
+python ferry_agent.py --open
 ```
 
-（仓库 Actions 页 → Build and release → Run workflow 可以先试跑一次，
-产物存在 artifact 里，不会建 Release。）
+零构建、零依赖（Python 自带 http.server），浏览器打开就是完整界面。
 
-**自己构建**也就一条命令：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File build-windows-exe.ps1
-```
-
-它自带 Python 和 Tk，装不装 Python 的机器都能跑。**它仍然执行同目录的
-`bridge_gui.py`** —— 所以控制台的「重载」自更新照常有效（把整个代码冻进去就没法自更新了）。
-也正因为这样，Release 的 zip 里必须连 `bridge_gui.py` 和 `assets/` 一起带上。
-
-macOS 那边同理，`Ferry.app` 是个免编译的 bundle，跑一次就有：
+### 要原生窗口和托盘图标
 
 ```bash
-bash make-mac-app.sh
+cd electron
+npm install          # 约 100 MB
+npm start            # 开发时直接跑
+npm run build        # 打包成 _electron/Ferry-win32-x64/Ferry.exe
 ```
 
-图标要重新生成的话：`python3 tools/make-icons.py`（纯标准库，不依赖 Pillow）。
+打出来的包约 270 MB（Electron 的体量），**仍然需要机器上有 Python 3** ——
+agent 是 Python 写的。打包前记得先退出所有 Ferry 进程，否则文件被占用会报 `EBUSY`。
 
-首次运行会引导你**添加服务器**，只需填一项：
+预编译的包在 **[Releases](../../releases)**，打 `v*` 标签自动构建。
+
+### 配置放在哪
 
 ```
-SSH 别名        myserver      ← 唯一必填（就是上一步的 -Alias）
-显示名称(可选)  留空则用别名
-服务器地址(可选) 仅界面显示
-私钥路径(可选)   留空则用 SSH 别名里配的
+%APPDATA%\Ferry\                        Windows
+~/Library/Application Support/Ferry/     macOS
+~/.config/ferry/                         Linux
 ```
 
-用户名、系统类型、隧道端口**不用填** —— 客户端连接时会自动上报，服务器自动分配端口。
+配置跟着用户走而不是跟着代码走 —— 打包应用的程序目录每次重装都会被覆盖，
+放那儿必丢。从旧版升级时会自动从老位置迁过来，老文件保留不动。
 
-然后点 **「启动隧道」**，看到「已连接」即可。
-
----
+首次运行点左栏「**＋ 添加**」粘贴接入码即可，不需要手填任何东西。
 
 ## 五、日常使用
 
@@ -316,14 +301,10 @@ sudo systemsetup -setremotelogin off   # macOS
 | 挂载时报「是系统目录」 | `/etc` `/usr` `/var` 这些不能当挂载点。放 `/root/mnt/...` 或自己新建的目录 |
 | Windows 上 `Ferry.exe` 被杀毒软件拦 | PyInstaller 打的包常被误报。加白名单，或直接用 `Ferry.lnk` / `start-windows.bat` |
 | Mac 上 `Ferry.app` 提示「已损坏」 | 隔离标记：`xattr -dr com.apple.quarantine Ferry.app` |
-| `Ferry.app` 双击没反应 | 它靠相对位置找 `bridge_gui.py`。别单独把 .app 拖走，要搬就整个文件夹一起搬 |
 | `remote port forwarding failed` | 服务器上那个端口被占。多半是上一条隧道的僵死会话还没释放 —— 控制台连续两次冲突会自动换端口；想立刻清掉在服务器上跑 `bridge-port-clean -c <机器>`（活着的隧道不会被动） |
 | 服务器命令卡住不返回 | SSH 复用连接坏了，`bridge-reset` |
 | sshd 启动失败 | `ListenAddress` 必须写在 `Match` 块**之前**；改完先 `sshd -t` 校验 |
 | 隧道通但连不上 sshd | 回环地址要写 `127.0.0.1`，**不能写 `localhost`**（Windows 会解析成 ::1） |
-| **Mac 上启动即「Python 意外退出」** | **系统/Xcode 自带的 python3 链接的是 Apple 废弃的 Tk 8.5.9，在现代 macOS（尤其 Apple Silicon）上必崩。**执行 `brew install python-tk`，然后用 `/opt/homebrew/bin/python3 bridge_gui.py` 启动。验证：`python3 -c "import tkinter;print(tkinter.TkVersion)"` 应 ≥ 8.6 |
-| Mac 上界面起不来（无崩溃） | 缺 tkinter：`brew install python-tk` |
-| Mac 双击 `.command` 没反应 | 权限丢了：`chmod +x start-mac.command` |
 | Mac 提示「无法打开，来自身份不明的开发者」 | 隔离标记：`xattr -dr com.apple.quarantine .` |
 | Mac 挂载 `~/Documents` / `~/Desktop` / `~/Downloads` 报 `Operation not permitted` | macOS 隐私保护（TCC）拦了 sshd。给 `/usr/libexec/sshd-keygen-wrapper` 授予**完全磁盘访问权限**：系统设置 → 隐私与安全性 → 完全磁盘访问权限 → `+` → `Cmd+Shift+G` 输入该路径 |
 | Mac 上 `bridge-daemon` 起不来 | macOS 无 `setsid`，已改为自动退回 `nohup`；若仍失败看 `bridge-daemon log <名>` |
@@ -335,21 +316,18 @@ sudo systemsetup -setremotelogin off   # macOS
 分发包（可直接拷给别人，不含任何个人数据）：
 
 ```
-bridge_gui.py                 桌面客户端（三平台通用）
-bridge-install.sh             服务器端安装（从 server/ 拷贝，无打包步骤）
+ferry_core.py                 核心逻辑（隧道/挂载/接入码/平台差异）
+ferry_agent.py                本地 HTTP agent，把核心暴露成 JSON API
+ui/                           网页界面（html + css + js）
+electron/                     Electron 外壳（main.js + package.json）
+bridge-install.sh             服务器端安装（从 server/ 拷贝）
 ferry-setup.py                本地一条命令全自动接入（可选路径）
-
-setup-windows.ps1             Windows：装 sshd + 收紧到回环 + 生成 Ferry.lnk
-setup-mac.sh                  macOS：同上 + 生成 Ferry.app
-build-windows-exe.ps1         构建 Ferry.exe
-make-mac-app.sh               生成 Ferry.app
-start-windows.bat             零配置启动（不想构建 exe 时用）
-start-mac.command             零配置启动（不想生成 .app 时用）
-
+setup-windows.ps1             Windows：装 sshd + 收紧到回环 + 建快捷方式
+setup-mac.sh                  macOS：同上
 assets/ferry.png|.ico|.icns   应用图标
 tools/make-icons.py           重新生成图标（纯标准库）
 server/                       服务器端工具源码（唯一来源，改完直接生效）
-.github/workflows/            打 tag 自动构建并发布 Ferry.exe / Ferry.app
+.github/workflows/            打 tag 自动构建并发布
 README.md                     本文件
 ```
 

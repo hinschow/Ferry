@@ -1,19 +1,18 @@
-解压后双击 **Ferry.exe**（Windows）或 **Ferry.app**（macOS）即可。
+解压后双击 **Ferry.exe**（Windows）即可。
 
-压缩包里已经带了 `bridge_gui.py` 和图标 —— 启动器只是外壳，真正跑的是同目录的
-`bridge_gui.py`，所以控制台的「重载」自更新照常有效。
+客户端是 Electron 外壳 + Python agent：界面走本地 HTTP，逻辑全在
+`ferry_core.py`。**这台机器需要装 Python 3**（agent 用它跑）。
 
 **接入服务器**：先在服务器上装工具（`git clone` 后 `bash bridge-install.sh`），
-再执行 `bridge-invite --name <机器名>` 发一张接入码，客户端左栏「＋ 添加」粘贴即可。
-完整说明见 README。
+再执行 `bridge-invite --name <机器名>` 发一张接入码，客户端左栏「＋ 添加」
+粘贴即可。完整说明见 README。
+
+不想用 Electron 也行：`python ferry_agent.py --open`，浏览器打开就是同一个界面。
 
 ### 已知提示
 
 - **Windows**：未签名，SmartScreen 会拦一次 —— 点「更多信息 → 仍要运行」。
-  PyInstaller 打的包也常被杀毒软件误报，需要时加白名单，或改用包里的
-  `start-windows.bat`（直接跑 Python，不经打包）。
-- **Windows 包是 x64**，ARM 版 Windows 请自己跑 `build-windows-exe.ps1`。
-- **macOS**：`Ferry.app` 是免编译的脚本包，需要带 Tk 8.6+ 的 Python：
-  `brew install python-tk`（系统自带的 Tk 8.5.9 会直接崩）。
+- **配置位置**：`%APPDATA%\Ferry\`（Win）/ `~/Library/Application Support/Ferry/`（Mac）
+  / `~/.config/ferry/`（Linux）。从旧版升级会自动迁移。
 - **macOS 首次打开**若提示「来自身份不明的开发者」：
   `xattr -dr com.apple.quarantine Ferry.app`

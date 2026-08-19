@@ -278,18 +278,24 @@ def write_client_cfg(alias, host):
 
 
 def launch():
-    step("启动图形界面")
-    gui = os.path.join(HERE, "bridge_gui.py")
-    if not os.path.exists(gui):
-        warn("同目录找不到 bridge_gui.py，请手动启动")
+    """把 agent 拉起来并用浏览器打开。
+
+    客户端已经是 Electron + Python agent 了 —— 这里只起 agent，
+    界面走浏览器；想要原生窗口就 cd electron && npm start。
+    """
+    step("启动控制台")
+    agent = os.path.join(HERE, "ferry_agent.py")
+    if not os.path.exists(agent):
+        warn("同目录下没有 ferry_agent.py，跳过")
         return
     exe = sys.executable
-    if IS_WIN:
-        cand = exe.replace("python.exe", "pythonw.exe")
+    if IS_WIN and exe.lower().endswith("python.exe"):
+        cand = exe[:-len("python.exe")] + "pythonw.exe"
         if os.path.exists(cand):
             exe = cand
-    subprocess.Popen([exe, gui], cwd=HERE, creationflags=NO_WINDOW)
-    ok("客户端已启动 —— 在界面里点「启动隧道」，然后「添加文件夹…」挂目录")
+    subprocess.Popen([exe, agent, "--open"], cwd=HERE, creationflags=NO_WINDOW)
+    ok("已启动，浏览器会自动打开控制台")
+    print("      想要原生窗口： cd electron && npm install && npm start")
 
 
 def main():

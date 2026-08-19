@@ -127,40 +127,38 @@ if ($ServerHost) {
 } else { Say "      skipped (pass -ServerHost to add)" }
 
 Say "[5/7] Desktop shortcut"
-# A shortcut with the real icon is the no-build way to get a proper-looking app.
-# Want an actual Ferry.exe instead? Run build-windows-exe.ps1.
-$gui = Join-Path $PSScriptRoot "bridge_gui.py"
-$pyw = (Get-Command pythonw -EA SilentlyContinue).Source
+# The client is now Electron + a Python agent. Build it with:
+#   cd electron; npm install; npm run build
+# then point a shortcut at _electron/Ferry-win32-x64/Ferry.exe
+$exe = Join-Path $PSScriptRoot "_electron\Ferry-win32-x64\Ferry.exe"
 $ico = Join-Path $PSScriptRoot "assets\ferry.ico"
-if (-not (Test-Path $gui)) { Warn "bridge_gui.py not found next to this script" }
-elseif (-not $pyw) { Warn "pythonw not found on PATH" }
-else {
+if (-not (Test-Path $exe)) {
+    Say "      skipped - not built yet (cd electron; npm install; npm run build)"
+} else {
     $sh = New-Object -ComObject WScript.Shell
-    $lnk = Join-Path $PSScriptRoot "Ferry.lnk"
-    $s = $sh.CreateShortcut($lnk)
-    $s.TargetPath = $pyw
-    $s.Arguments = "`"$gui`""
-    $s.WorkingDirectory = $PSScriptRoot
-    $s.Description = "Ferry bridge console"
-    if (Test-Path $ico) { $s.IconLocation = $ico }
-    $s.Save()
-    Say ("      created " + $lnk + "   (right-click -> pin to taskbar)")
+    foreach ($dest in @((Join-Path $PSScriptRoot "Ferry.lnk"),
+                        (Join-Path ([Environment]::GetFolderPath("Desktop")) "Ferry.lnk"))) {
+        $s2 = $sh.CreateShortcut($dest)
+        $s2.TargetPath = $exe
+        $s2.WorkingDirectory = Split-Path $exe
+        $s2.Description = "Ferry bridge console"
+        if (Test-Path $ico) { $s2.IconLocation = $ico }
+        $s2.Save()
+    }
+    Say "      created Ferry.lnk (here and on the Desktop)"
 }
 
 Say "[6/7] Startup shortcut"
 if ($AutoStart) {
-    if (-not (Test-Path $gui)) { Warn "bridge_gui.py not found next to this script" }
-    elseif (-not $pyw) { Warn "pythonw not found on PATH" }
+    if (-not (Test-Path $exe)) { Warn "not built yet, skipping" }
     else {
-        $lnk = Join-Path ([Environment]::GetFolderPath("Startup")) "BridgeConsole.lnk"
         $sh = New-Object -ComObject WScript.Shell
-        $s = $sh.CreateShortcut($lnk)
-        $s.TargetPath = $pyw
-        $s.Arguments = "`"$gui`" --auto-tunnel --minimized"
-        $s.WorkingDirectory = $PSScriptRoot
-        if (Test-Path $ico) { $s.IconLocation = $ico }
-        $s.WindowStyle = 7
-        $s.Save()
+        $lnk = Join-Path ([Environment]::GetFolderPath("Startup")) "Ferry.lnk"
+        $s3 = $sh.CreateShortcut($lnk)
+        $s3.TargetPath = $exe
+        $s3.WorkingDirectory = Split-Path $exe
+        if (Test-Path $ico) { $s3.IconLocation = $ico }
+        $s3.Save()
         Say ("      created " + $lnk)
     }
 } else { Say "      skipped (pass -AutoStart to enable)" }

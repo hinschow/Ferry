@@ -79,6 +79,11 @@ function createTray() {
   tray.on('click', () => { win.isVisible() ? win.hide() : win.show(); });
 }
 
+// Electron 默认把 userData 放在 %APPDATA%\<productName>，正好和我们放配置的
+// 目录撞上 —— 缓存目录会和 bridge-config.json、status/ 混在一起，用户"清理
+// 应用数据"就可能把配置一起删了。挪进子目录隔开。
+app.setPath('userData', path.join(app.getPath('appData'), 'Ferry', 'electron'));
+
 app.whenReady().then(async () => {
   try {
     const url = await startAgent();
