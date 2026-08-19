@@ -29,7 +29,8 @@ import ferry_core as core                                    # noqa: E402
 from ferry_core import (CFG, save_cfg, Server, sshd_status,   # noqa: E402
                         sshd_start, sshd_stop, machine_id, shlex_quote,
                         parse_invite, apply_invite, mount_local, mount_target,
-                        mount_entry, default_mount_dir, BASE_DIR)
+                        mount_entry, default_mount_dir, BASE_DIR,
+                        INSTALL_DIR, CFG_PATH)
 
 UI_DIR = os.path.join(BASE_DIR, "ui")
 TOKEN = secrets.token_urlsafe(24)
@@ -501,7 +502,13 @@ def free_port():
 def main():
     global AGENT
     AGENT = Agent()
-    AGENT.log("Ferry agent 启动")
+    # 把实际读的配置路径打出来 —— 从仓库副本启动会读到空配置，
+    # 界面上只表现为"没有服务器"，不写清楚根本查不出来
+    AGENT.log(f"Ferry agent 启动 · 配置 {CFG_PATH}")
+    if not os.path.exists(CFG_PATH):
+        AGENT.log("配置文件不存在，当作全新安装（左上角「＋ 添加」粘接入码即可）", "warn")
+    elif not AGENT.servers:
+        AGENT.log("配置里没有服务器 —— 确认这是你在用的那份配置", "warn")
     port = free_port()
     srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     url = f"http://127.0.0.1:{port}/?t={TOKEN}"

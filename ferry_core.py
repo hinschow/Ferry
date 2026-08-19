@@ -21,8 +21,28 @@ import time
 
 APP_NAME = "桥接控制台"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CFG_PATH = os.path.join(BASE_DIR, "bridge-config.json")
-STATUS_ROOT = os.path.join(BASE_DIR, "status")
+
+
+def _find_install_dir():
+    r"""配置和状态目录放在哪。
+
+    默认就在脚本旁边。但仓库常常是 clone 在安装目录里面的
+    （D:\...\bridge-console\repo\），从 repo 那份启动就会读到一个空配置，
+    界面上表现为"一台服务器都没有"，还看不出为什么 —— 用户实际踩过。
+    所以往上找一层：父目录有 bridge-config.json 就用父目录。
+    """
+    here = BASE_DIR
+    if os.path.exists(os.path.join(here, "bridge-config.json")):
+        return here
+    up = os.path.dirname(here)
+    if up and up != here and os.path.exists(os.path.join(up, "bridge-config.json")):
+        return up
+    return here
+
+
+INSTALL_DIR = _find_install_dir()
+CFG_PATH = os.path.join(INSTALL_DIR, "bridge-config.json")
+STATUS_ROOT = os.path.join(INSTALL_DIR, "status")
 
 DEFAULT_CFG = {
     "servers": [],
